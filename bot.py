@@ -1,8 +1,8 @@
 import os
 import re
 import logging
-import asyncio
 import random
+import asyncio
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
@@ -25,13 +25,9 @@ if not TOKEN:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Вероятность ответа ИИ, если не упомянули
 RESPONSE_CHANCE = 0.4
-
-# Хранилище последних ответов ИИ для озвучивания
 last_ai_reply = {}
 
-# Инициализация БД
 init_db()
 
 # ------------------------------------------------------------
@@ -42,7 +38,7 @@ async def send_typing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ------------------------------------------------------------
-# Обработчики команд
+# Обработчики команд Telegram (начинаются с /)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🍒 Привет! Я Черри.\n"
@@ -52,14 +48,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Скачивать видео/аудио (ссылка или !звук ссылка)\n"
         "• Общаться как человек (просто пиши, можешь позвать по имени)\n"
         "• Озвучивать ответы (!озвучь)\n\n"
-        "Команды: /start, /clear (очистить историю ИИ), /help"
+        "Команды: /start, /clear, /help"
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
 
 async def clear_ai_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # В нашей реализации история хранится в БД, поэтому просто удаляем записи этого пользователя в этом чате
     import sqlite3
     from db import DB_PATH
     conn = sqlite3.connect(DB_PATH)
@@ -70,119 +65,170 @@ async def clear_ai_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
     await update.message.reply_text("🧠 История диалога очищена.")
 
-async def fix_layout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """!тр текст — исправляет раскладку указанного текста или ответа."""
-    args = context.args
-    if args:
-        text = ' '.join(args)
-        fixed = fix_keyboard(text)
-        await update.message.reply_text(f"🔁 Исправлено: {fixed}")
-    elif update.message.reply_to_message:
-        original = update.message.reply_to_message.text
-        if original:
-            fixed = fix_keyboard(original)
+# ------------------------------------------------------------
+# Обработчик команд с ! (кириллические)
+async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if not text.startswith('!'):
+        return
+
+    # Разбираем команду
+    parts = text.split()
+    cmd = parts[0][1:].lower()  # убираем '!'
+    args = parts[1:]
+
+    # --------------------------------------------------------
+    # !тр
+    if cmd == "тр":
+        if args:
+            fixed = fix_keyboard(' '.join(args))
             await update.message.reply_text(f"🔁 Исправлено: {fixed}")
+        elif update.message.reply_to_message:
+            original = update.message.reply_to_message.text
+            if original:
+                fixed = fix_keyboard(original)
+                await update.message.reply_text(f"🔁 Исправлено: {fixed}")
+            else:
+                await update.message.reply_text("Ответь на текстовое сообщение.")
         else:
-            await update.message.reply_text("Ответь на текстовое сообщение.")
-    else:
-        await update.message.reply_text("Напиши: !тр текст  (или ответь на сообщение)")
+            await update.message.reply_text("Напиши: !тр текст (или ответь на сообщение)")
 
-# ------------------------------------------------------------
-# Долги
-async def add_debt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """!должен @username сумма описание"""
-    args = context.args
-    if len(args) < 3:
-        await update.message.reply_text("❗ Формат: !должен @username сумма описание\nПример: !должен @petrov 500 за шаурму")
-        return
-    mention = args[0]
-    if not mention.startswith('@'):
-        await update.message.reply_text("Укажи пользователя через @username")
-        return
-    try:
-        amount = float(args[1])
-    except:
-        await update.message.reply_text("Сумма должна быть числом.")
-        return
-    description = ' '.join(args[2:])
-    creditor_id = str(update.effective_user.id)
-    creditor_name = update.effective_user.full_name
-    debtor_username = mention[1:]
-    # Попробуем найти user_id должника по username (если бот видит чат)
-    debtor_id = None
-    debtor_name = debtor_username
-    try:
-        # В группе можно получить chat member по username
-        member = await context.bot.get_chat_member(update.effective_chat.id, mention)
-        debtor_id = str(member.user.id)
-        debtor_name = member.user.full_name
-    except:
-        # Не нашли — сохраним только username как идентификатор
+    # --------------------------------------------------------
+    # !должен
+    elif cmd == "должен":
+        if len(args) < 3:
+            await update.message.reply_text("❗ Формат: !должен @username сумма описание\nПример: !должен @petrov 500 за шаурму")
+            return
+        mention = args[0]
+        if not mention.startswith('@'):
+            await update.message.reply_text("Укажи пользователя через @username")
+            return
+        try:
+            amount = float(args[1])
+        except:
+            await update.message.reply_text("Сумма должна быть числом.")
+            return
+        description = ' '.join(args[2:])
+        creditor_id = str(update.effective_user.id)
+        creditor_name = update.effective_user.full_name
+        debtor_username = mention[1:]
         debtor_id = debtor_username
-    debts_module.add_debt(
-        str(update.effective_chat.id),
-        creditor_id, creditor_name,
-        debtor_id, debtor_name,
-        amount, description
-    )
-    await update.message.reply_text(f"✅ Записал: {debtor_name} должен {creditor_name} {amount} руб. ({description})")
+        debtor_name = debtor_username
+        try:
+            member = await context.bot.get_chat_member(update.effective_chat.id, mention)
+            debtor_id = str(member.user.id)
+            debtor_name = member.user.full_name
+        except:
+            pass
+        debts_module.add_debt(
+            str(update.effective_chat.id),
+            creditor_id, creditor_name,
+            debtor_id, debtor_name,
+            amount, description
+        )
+        await update.message.reply_text(f"✅ Записал: {debtor_name} должен {creditor_name} {amount} руб. ({description})")
 
-async def repay_debt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """!вернул @username сумма"""
-    args = context.args
-    if len(args) < 2:
-        await update.message.reply_text("❗ Формат: !вернул @username сумма")
-        return
-    mention = args[0]
-    if not mention.startswith('@'):
-        await update.message.reply_text("Укажи пользователя через @username")
-        return
-    try:
-        amount = float(args[1])
-    except:
-        await update.message.reply_text("Сумма должна быть числом.")
-        return
-    creditor_username = mention[1:]
-    debtor_id = str(update.effective_user.id)
-    # Определяем creditor_id
-    creditor_id = None
-    try:
-        member = await context.bot.get_chat_member(update.effective_chat.id, mention)
-        creditor_id = str(member.user.id)
-    except:
+    # --------------------------------------------------------
+    # !вернул
+    elif cmd == "вернул":
+        if len(args) < 2:
+            await update.message.reply_text("❗ Формат: !вернул @username сумма")
+            return
+        mention = args[0]
+        if not mention.startswith('@'):
+            await update.message.reply_text("Укажи пользователя через @username")
+            return
+        try:
+            amount = float(args[1])
+        except:
+            await update.message.reply_text("Сумма должна быть числом.")
+            return
+        creditor_username = mention[1:]
+        debtor_id = str(update.effective_user.id)
         creditor_id = creditor_username
-    success = debts_module.repay_debt(
-        str(update.effective_chat.id),
-        creditor_id,
-        debtor_id,
-        amount
-    )
-    if success:
-        await update.message.reply_text(f"✅ Отметил возврат {amount} руб.")
-    else:
-        await update.message.reply_text("❌ Не найден непогашенный долг с такой суммой.")
+        try:
+            member = await context.bot.get_chat_member(update.effective_chat.id, mention)
+            creditor_id = str(member.user.id)
+        except:
+            pass
+        success = debts_module.repay_debt(
+            str(update.effective_chat.id),
+            creditor_id,
+            debtor_id,
+            amount
+        )
+        if success:
+            await update.message.reply_text(f"✅ Отметил возврат {amount} руб.")
+        else:
+            await update.message.reply_text("❌ Не найден непогашенный долг с такой суммой.")
 
-async def list_debts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """!долги — показать долги текущего пользователя."""
-    debts_str = debts_module.get_debts_for_user(
-        str(update.effective_chat.id),
-        str(update.effective_user.id)
-    )
-    await update.message.reply_text(debts_str, parse_mode='Markdown')
+    # --------------------------------------------------------
+    # !долги
+    elif cmd == "долги":
+        debts_str = debts_module.get_debts_for_user(
+            str(update.effective_chat.id),
+            str(update.effective_user.id)
+        )
+        await update.message.reply_text(debts_str, parse_mode='Markdown')
+
+    # --------------------------------------------------------
+    # !звук
+    elif cmd == "звук":
+        if not args:
+            await update.message.reply_text("❗ Напиши: !звук ссылка_на_видео")
+            return
+        url = args[0]
+        if not re.search(r'(tiktok\.com|vk\.com|youtu\.be|youtube\.com)', url):
+            await update.message.reply_text("Ссылка должна быть на TikTok, VK или YouTube.")
+            return
+        await send_typing(update, context)
+        await update.message.reply_text("🎵 Скачиваю аудио...")
+        filepath = download_audio(url)
+        if filepath and os.path.exists(filepath):
+            try:
+                with open(filepath, 'rb') as f:
+                    await update.message.reply_audio(audio=f, title="audio.mp3")
+                os.remove(filepath)
+            except Exception as e:
+                logger.error(f"Send audio error: {e}")
+                await update.message.reply_text("Не удалось отправить аудио.")
+        else:
+            await update.message.reply_text("Не удалось скачать аудио.")
+
+    # --------------------------------------------------------
+    # !озвучь
+    elif cmd == "озвучь":
+        user_id = str(update.effective_user.id)
+        if user_id not in last_ai_reply:
+            await update.message.reply_text("Сначала получи ответ от Черри (напиши что-нибудь).")
+            return
+        text_to_say = last_ai_reply[user_id]
+        await send_typing(update, context)
+        try:
+            voice_file = f"voice_{user_id}.ogg"
+            await text_to_voice(text_to_say, voice_file)
+            with open(voice_file, 'rb') as vf:
+                await update.message.reply_voice(voice=vf)
+            os.remove(voice_file)
+        except Exception as e:
+            logger.error(f"Voice command error: {e}")
+            await update.message.reply_text("Не удалось создать голосовое сообщение.")
+
+    else:
+        # Неизвестная команда — игнорируем
+        pass
 
 # ------------------------------------------------------------
-# Скачивание
+# Скачивание по ссылке (авто)
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Автоматическое скачивание видео по ссылке."""
     text = update.message.text
     url_match = re.search(r'(https?://\S+)', text)
     if not url_match:
         return
     url = url_match.group(0)
-    # Проверяем, подходит ли ссылка
     if not re.search(r'(tiktok\.com|vm\.tiktok\.com|vk\.com/video|youtu\.be|youtube\.com)', url):
         return
-    # Если это команда !звук, не обрабатываем здесь
+    # Если это команда !звук, пропускаем (обработается выше)
     if text.startswith('!звук'):
         return
     await send_typing(update, context)
@@ -199,39 +245,22 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Не удалось скачать видео. Проверь ссылку.")
 
-async def audio_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """!звук ссылка — скачать аудио из видео."""
-    args = context.args
-    if not args:
-        await update.message.reply_text("❗ Напиши: !звук ссылка_на_видео")
+# ------------------------------------------------------------
+# Автоисправление раскладки
+async def auto_fix_layout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if not text or text.startswith('!'):
         return
-    url = args[0]
-    if not re.search(r'(tiktok\.com|vk\.com|youtu\.be|youtube\.com)', url):
-        await update.message.reply_text("Ссылка должна быть на TikTok, VK или YouTube.")
-        return
-    await send_typing(update, context)
-    await update.message.reply_text("🎵 Скачиваю аудио...")
-    filepath = download_audio(url)
-    if filepath and os.path.exists(filepath):
-        try:
-            with open(filepath, 'rb') as f:
-                await update.message.reply_audio(audio=f, title="audio.mp3")
-            os.remove(filepath)
-        except Exception as e:
-            logger.error(f"Send audio error: {e}")
-            await update.message.reply_text("Не удалось отправить аудио.")
-    else:
-        await update.message.reply_text("Не удалось скачать аудио.")
+    fixed = fix_keyboard(text)
+    if fixed != text:
+        await update.message.reply_text(f"🔁 Возможно, вы имели в виду: {fixed}")
 
 # ------------------------------------------------------------
 # ИИ Черри
 async def ai_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает текстовые сообщения для ИИ."""
     text = update.message.text
     if not text or text.startswith('!'):
         return
-
-    # Пропускаем, если это ссылка (обработается handle_url)
     if re.search(r'(https?://\S+)', text):
         return
 
@@ -244,7 +273,6 @@ async def ai_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_typing(update, context)
         reply = await ai.get_cherry_response(chat_id, user_id, text)
         last_ai_reply[user_id] = reply
-        # 30% шанс на голосовое
         if random.random() < 0.3:
             try:
                 voice_file = f"voice_{user_id}.ogg"
@@ -258,57 +286,24 @@ async def ai_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text(reply)
 
-async def voice_last_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """!озвучь — озвучить последний ответ Черри."""
-    user_id = str(update.effective_user.id)
-    if user_id not in last_ai_reply:
-        await update.message.reply_text("Сначала получи ответ от Черри (напиши что-нибудь).")
-        return
-    text = last_ai_reply[user_id]
-    await send_typing(update, context)
-    try:
-        voice_file = f"voice_{user_id}.ogg"
-        await text_to_voice(text, voice_file)
-        with open(voice_file, 'rb') as vf:
-            await update.message.reply_voice(voice=vf)
-        os.remove(voice_file)
-    except Exception as e:
-        logger.error(f"Voice command error: {e}")
-        await update.message.reply_text("Не удалось создать голосовое сообщение.")
-
 # ------------------------------------------------------------
-# Автоисправление раскладки
-async def auto_fix_layout(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Автоматически предлагает исправление, если текст похож на сбитую раскладку."""
-    text = update.message.text
-    if not text or text.startswith('!'):
-        return
-    fixed = fix_keyboard(text)
-    if fixed != text:
-        await update.message.reply_text(f"🔁 Возможно, вы имели в виду: {fixed}")
-
-# ------------------------------------------------------------
-# Запуск
+# Основная функция
 def main():
     app = Application.builder().token(TOKEN).build()
 
-    # Команды
+    # Обработчики команд с /
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("clear", clear_ai_history))
-    app.add_handler(CommandHandler("тр", fix_layout_command))
-    app.add_handler(CommandHandler("должен", add_debt_command))
-    app.add_handler(CommandHandler("вернул", repay_debt_command))
-    app.add_handler(CommandHandler("долги", list_debts_command))
-    app.add_handler(CommandHandler("звук", audio_command))
-    app.add_handler(CommandHandler("озвучь", voice_last_reply))
 
-    # Обработчики сообщений (порядок важен)
-    # 1. Ссылки на видео (авто-скачивание)
+    # Обработчик команд с ! (кириллические)
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^!'), handle_prefix_commands))
+
+    # Автоскачивание видео по ссылке
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url), group=0)
-    # 2. Автоисправление раскладки
+    # Автоисправление раскладки
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_fix_layout), group=1)
-    # 3. ИИ Черри (всё остальное)
+    # ИИ Черри (все остальные текстовые сообщения)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_response), group=2)
 
     logger.info("Cherry Bot запущен")
