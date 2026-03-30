@@ -48,7 +48,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Скачивать видео/аудио (ссылка или !звук ссылка)\n"
         "• Общаться как человек (просто пиши, можешь позвать по имени)\n"
         "• Озвучивать ответы (!озвучь)\n\n"
-        "Команды: /start, /clear, /help"
+        "Команды: /start, /clear, /help, а также !команды"
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -72,14 +72,30 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
     if not text.startswith('!'):
         return
 
-    # Разбираем команду
     parts = text.split()
-    cmd = parts[0][1:].lower()  # убираем '!'
+    cmd = parts[0][1:].lower()
     args = parts[1:]
 
     # --------------------------------------------------------
+    # !команды / !help / !помощь
+    if cmd in ["команды", "help", "помощь"]:
+        await update.message.reply_text(
+            "🍒 *Список команд:*\n"
+            "`!тр [текст]` — исправить раскладку (если текст не указан, исправляет ответное сообщение)\n"
+            "`!должен @username сумма описание` — записать долг\n"
+            "`!вернул @username сумма` — отметить возврат долга\n"
+            "`!долги` — показать ваши долги\n"
+            "`!звук ссылка` — скачать аудио из видео\n"
+            "`!озвучь` — озвучить последний ответ Черри\n"
+            "`!команды` — показать этот список\n\n"
+            "Также я автоматически исправляю сбившуюся раскладку и скачиваю видео по ссылке.\n"
+            "Просто пишите мне, чтобы пообщаться, или зовите по имени «Черри».",
+            parse_mode='Markdown'
+        )
+
+    # --------------------------------------------------------
     # !тр
-    if cmd == "тр":
+    elif cmd == "тр":
         if args:
             fixed = fix_keyboard(' '.join(args))
             await update.message.reply_text(f"🔁 Исправлено: {fixed}")
@@ -228,7 +244,6 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = url_match.group(0)
     if not re.search(r'(tiktok\.com|vm\.tiktok\.com|vk\.com/video|youtu\.be|youtube\.com)', url):
         return
-    # Если это команда !звук, пропускаем (обработается выше)
     if text.startswith('!звук'):
         return
     await send_typing(update, context)
