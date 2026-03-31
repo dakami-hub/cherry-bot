@@ -2,7 +2,6 @@ import os
 import re
 import logging
 import random
-import asyncio
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
@@ -10,7 +9,7 @@ from telegram.ext import (
 )
 from telegram.constants import ChatAction
 
-from db import init_db
+from db import init_db, get_setting, set_setting
 from keyboard import fix_keyboard
 from download import download_video, download_audio
 from tts import text_to_voice
@@ -25,20 +24,39 @@ if not TOKEN:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-RESPONSE_CHANCE = 0.4
-last_ai_reply = {}
+# Администратор (замени на свой username или ID)
+ADMIN_USERNAME = "dakamiwannadielmaowhatabozo"  # без @
 
+last_ai_reply = {}
 init_db()
 
 # ------------------------------------------------------------
-# Вспомогательные функции
+# Настройки из БД
+def get_mode() -> str:
+    return get_setting("mode", "cherry")
+
+def set_mode(mode: str):
+    set_setting("mode", mode)
+
+def get_response_chance() -> float:
+    val = get_setting("response_chance", "0.4")
+    return float(val)
+
+def set_response_chance(chance: float):
+    set_setting("response_chance", str(chance))
+
+# ------------------------------------------------------------
 async def send_typing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id, action=ChatAction.TYPING
     )
 
+def is_admin(user) -> bool:
+    # можно также добавить проверку по user.id, но пока по username
+    return user.username and user.username.lower() == ADMIN_USERNAME.lower()
+
 # ------------------------------------------------------------
-# Обработчики команд Telegram (начинаются с /)
+# Команды /start, /help, /clear
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🍒 Привет! Я Черри.\n"
@@ -46,9 +64,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Исправлять раскладку (авто или !тр)\n"
         "• Вести долги (!должен, !вернул, !долги)\n"
         "• Скачивать видео/аудио (ссылка или !звук ссылка)\n"
-        "• Общаться как человек (просто пиши, можешь позвать по имени)\n"
+        "• Общаться как человек (в режиме cherry) или через !ии (в режиме normal)\n"
         "• Озвучивать ответы (!озвучь)\n\n"
-        "Команды: /start, /clear, /help, а также !команды"
+        "Команды: /start, /clear, /help, !команды"
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -66,7 +84,7 @@ async def clear_ai_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🧠 История диалога очищена.")
 
 # ------------------------------------------------------------
-# Обработчик команд с ! (кириллические)
+# Обработчик всех команд с !
 async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     if not text.startswith('!'):
@@ -76,44 +94,92 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
     cmd = parts[0][1:].lower()
     args = parts[1:]
 
-    # --------------------------------------------------------
-    # !команды / !help / !помощь
+    # ---------- !команды ----------
     if cmd in ["команды", "help", "помощь"]:
+        mode = get_mode()
+        chance = int(get_response_chance() * 100)
         await update.message.reply_text(
-            "🍒 *Список команд:*\n"
-            "`!тр [текст]` — исправить раскладку (если текст не указан, исправляет ответное сообщение)\n"
+            f"🍒 *Список команд:*\n"
+            "`!тр [текст]` — исправить раскладку\n"
             "`!должен @username сумма описание` — записать долг\n"
-            "`!вернул @username сумма` — отметить возврат долга\n"
+            "`!вернул @username сумма` — отметить возврат\n"
             "`!долги` — показать ваши долги\n"
             "`!звук ссылка` — скачать аудио из видео\n"
-            "`!озвучь` — озвучить последний ответ Черри\n"
-            "`!команды` — показать этот список\n\n"
-            "Также я автоматически исправляю сбившуюся раскладку и скачиваю видео по ссылке.\n"
-            "Просто пишите мне, чтобы пообщаться, или зовите по имени «Черри».",
+            "`!озвучь` — озвучить последний ответ\n"
+            "`!ии текст` — поговорить с обычным ИИ (в любом режиме)\n"
+            "`!режим [cherry/normal]` — сменить режим (только админ)\n"
+            "`!шанс [0-100]` — сменить шанс ответа (только админ)\n"
+            "`!команды` — этот список\n\n"
+            f"*Текущий режим:* {mode}\n"
+            f"*Шанс ответа:* {chance}%",
             parse_mode='Markdown'
         )
 
-    # --------------------------------------------------------
-    # !тр
+    # ---------- !режим (админ) ----------
+    elif cmd == "режим":
+        if not is_admin(update.effective_user):
+            await update.message.reply_text("⛔ Только для администратора.")
+            return
+        if not args:
+            await update.message.reply_text(f"Текущий режим: {get_mode()}. Используй: !режим cherry или !режим normal")
+            return
+        new_mode = args[0].lower()
+        if new_mode not in ["cherry", "normal"]:
+            await update.message.reply_text("Режим должен быть cherry или normal")
+            return
+        set_mode(new_mode)
+        await update.message.reply_text(f"✅ Режим изменён на {new_mode}")
+
+    # ---------- !шанс (админ) ----------
+    elif cmd == "шанс":
+        if not is_admin(update.effective_user):
+            await update.message.reply_text("⛔ Только для администратора.")
+            return
+        if not args:
+            curr = int(get_response_chance() * 100)
+            await update.message.reply_text(f"Текущий шанс ответа: {curr}%")
+            return
+        try:
+            val = float(args[0])
+            if val < 0 or val > 100:
+                raise ValueError
+            set_response_chance(val / 100.0)
+            await update.message.reply_text(f"✅ Шанс ответа изменён на {val}%")
+        except:
+            await update.message.reply_text("Укажи число от 0 до 100")
+
+    # ---------- !ии (обычный ассистент) ----------
+    elif cmd == "ии":
+        query = None
+        if args:
+            query = ' '.join(args)
+        elif update.message.reply_to_message:
+            query = update.message.reply_to_message.text
+        if not query:
+            await update.message.reply_text("Напиши: !ии текст (или ответь на сообщение)")
+            return
+        await send_typing(update, context)
+        chat_id = str(update.effective_chat.id)
+        user_id = str(update.effective_user.id)
+        reply = await ai.get_normal_response(chat_id, user_id, query)
+        last_ai_reply[user_id] = reply
+        await update.message.reply_text(reply)
+
+    # ---------- !тр ----------
     elif cmd == "тр":
         if args:
             fixed = fix_keyboard(' '.join(args))
             await update.message.reply_text(f"🔁 Исправлено: {fixed}")
-        elif update.message.reply_to_message:
-            original = update.message.reply_to_message.text
-            if original:
-                fixed = fix_keyboard(original)
-                await update.message.reply_text(f"🔁 Исправлено: {fixed}")
-            else:
-                await update.message.reply_text("Ответь на текстовое сообщение.")
+        elif update.message.reply_to_message and update.message.reply_to_message.text:
+            fixed = fix_keyboard(update.message.reply_to_message.text)
+            await update.message.reply_text(f"🔁 Исправлено: {fixed}")
         else:
             await update.message.reply_text("Напиши: !тр текст (или ответь на сообщение)")
 
-    # --------------------------------------------------------
-    # !должен
+    # ---------- !должен ----------
     elif cmd == "должен":
         if len(args) < 3:
-            await update.message.reply_text("❗ Формат: !должен @username сумма описание\nПример: !должен @petrov 500 за шаурму")
+            await update.message.reply_text("❗ Формат: !должен @username сумма описание")
             return
         mention = args[0]
         if not mention.startswith('@'):
@@ -144,8 +210,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         )
         await update.message.reply_text(f"✅ Записал: {debtor_name} должен {creditor_name} {amount} руб. ({description})")
 
-    # --------------------------------------------------------
-    # !вернул
+    # ---------- !вернул ----------
     elif cmd == "вернул":
         if len(args) < 2:
             await update.message.reply_text("❗ Формат: !вернул @username сумма")
@@ -178,8 +243,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         else:
             await update.message.reply_text("❌ Не найден непогашенный долг с такой суммой.")
 
-    # --------------------------------------------------------
-    # !долги
+    # ---------- !долги ----------
     elif cmd == "долги":
         debts_str = debts_module.get_debts_for_user(
             str(update.effective_chat.id),
@@ -187,8 +251,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         )
         await update.message.reply_text(debts_str, parse_mode='Markdown')
 
-    # --------------------------------------------------------
-    # !звук
+    # ---------- !звук ----------
     elif cmd == "звук":
         if not args:
             await update.message.reply_text("❗ Напиши: !звук ссылка_на_видео")
@@ -211,12 +274,11 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         else:
             await update.message.reply_text("Не удалось скачать аудио.")
 
-    # --------------------------------------------------------
-    # !озвучь
+    # ---------- !озвучь ----------
     elif cmd == "озвучь":
         user_id = str(update.effective_user.id)
         if user_id not in last_ai_reply:
-            await update.message.reply_text("Сначала получи ответ от Черри (напиши что-нибудь).")
+            await update.message.reply_text("Сначала получи ответ от ИИ (через !ии или в режиме cherry).")
             return
         text_to_say = last_ai_reply[user_id]
         await send_typing(update, context)
@@ -231,11 +293,10 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("Не удалось создать голосовое сообщение.")
 
     else:
-        # Неизвестная команда — игнорируем
-        pass
+        pass  # неизвестная команда
 
 # ------------------------------------------------------------
-# Скачивание по ссылке (авто)
+# Автоскачивание видео
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     url_match = re.search(r'(https?://\S+)', text)
@@ -271,20 +332,25 @@ async def auto_fix_layout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🔁 Возможно, вы имели в виду: {fixed}")
 
 # ------------------------------------------------------------
-# ИИ Черри
-async def ai_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Режим Черри (отвечает сама, с шансом, на имя и реплай)
+async def cherry_mode_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if not text or text.startswith('!'):
         return
     if re.search(r'(https?://\S+)', text):
         return
 
+    # Если режим не cherry – не отвечаем
+    if get_mode() != "cherry":
+        return
+
     chat_id = str(update.effective_chat.id)
     user_id = str(update.effective_user.id)
     is_named = "черри" in text.lower()
     is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
+    chance = get_response_chance()
 
-    if is_named or is_reply or random.random() < RESPONSE_CHANCE:
+    if is_named or is_reply or random.random() < chance:
         await send_typing(update, context)
         reply = await ai.get_cherry_response(chat_id, user_id, text)
         last_ai_reply[user_id] = reply
@@ -302,24 +368,22 @@ async def ai_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(reply)
 
 # ------------------------------------------------------------
-# Основная функция
 def main():
     app = Application.builder().token(TOKEN).build()
 
-    # Обработчики команд с /
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("clear", clear_ai_history))
 
-    # Обработчик команд с ! (кириллические)
+    # Все команды с !
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^!'), handle_prefix_commands))
 
-    # Автоскачивание видео по ссылке
+    # Автоскачивание
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url), group=0)
     # Автоисправление раскладки
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_fix_layout), group=1)
-    # ИИ Черри (все остальные текстовые сообщения)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_response), group=2)
+    # Режим Черри (только если режим cherry)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cherry_mode_response), group=2)
 
     logger.info("Cherry Bot запущен")
     app.run_polling(drop_pending_updates=True)
