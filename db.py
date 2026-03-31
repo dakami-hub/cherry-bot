@@ -1,10 +1,12 @@
 import sqlite3
 import os
+import logging
 
 DB_PATH = "/app/data/bot.db"
 
 def init_db():
     os.makedirs("/app/data", exist_ok=True)
+    logging.info(f"Initializing database at {DB_PATH}")
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''
@@ -46,8 +48,17 @@ def init_db():
             role TEXT
         )
     ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS known_users (
+            user_id TEXT PRIMARY KEY,
+            username TEXT,
+            full_name TEXT,
+            last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     conn.commit()
     conn.close()
+    logging.info("Database initialized")
 
 def get_setting(chat_id: str, key: str, default: str = None) -> str:
     conn = sqlite3.connect(DB_PATH)
@@ -101,3 +112,21 @@ def get_all_admins():
     rows = c.fetchall()
     conn.close()
     return rows
+
+def save_user(user_id: str, username: str = None, full_name: str = None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+        INSERT OR REPLACE INTO known_users (user_id, username, full_name, last_seen)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+    ''', (user_id, username, full_name))
+    conn.commit()
+    conn.close()
+
+def get_user_by_username(username: str):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT user_id, full_name FROM known_users WHERE username = ?", (username,))
+    row = c.fetchone()
+    conn.close()
+    return row
