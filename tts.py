@@ -1,11 +1,12 @@
-import edge_tts
 import os
-import asyncio
 import logging
-
-VOICE = "ru-RU-SvetlanaNeural"
+from gtts import gTTS
 
 async def text_to_voice(text: str, filename: str) -> None:
-    """Сохраняет голос в файл."""
-    communicate = edge_tts.Communicate(text, VOICE)
-    await communicate.save(filename)
+    """Сохраняет голос в файл через Google TTS."""
+    try:
+        tts = gTTS(text=text, lang='ru')
+        tts.save(filename)
+    except Exception as e:
+        logging.error(f"gTTS error: {e}")
+        raise
