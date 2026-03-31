@@ -3,7 +3,9 @@ from db import DB_PATH
 
 def add_debt(chat_id: str, creditor_id: str, creditor_name: str,
              debtor_id: str, debtor_name: str, amount: float, description: str) -> None:
-    """Добавляет новый долг."""
+    """
+    Добавляет долг: debtor должен creditor сумму amount за description.
+    """
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''
@@ -15,12 +17,12 @@ def add_debt(chat_id: str, creditor_id: str, creditor_name: str,
 
 def repay_debt(chat_id: str, creditor_id: str, debtor_id: str, amount: float) -> bool:
     """
-    Погашает сумму amount с долгов кредитору. Списывает с самых старых долгов,
-    уменьшая или помечая их как погашенные. Возвращает True, если сумма списана.
+    Погашает часть долга. Ищет долги, где кредитор = creditor_id, должник = debtor_id,
+    и списывает amount с самых старых долгов. Возвращает True, если удалось что-то списать.
     """
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # Получаем все непогашенные долги для этой пары (кредитор-должник), сортируем по дате (старые первыми)
+    # Все непогашенные долги для этой пары, старые первыми
     c.execute('''
         SELECT id, amount FROM debts
         WHERE chat_id = ? AND creditor_id = ? AND debtor_id = ? AND repaid = 0
@@ -33,12 +35,10 @@ def repay_debt(chat_id: str, creditor_id: str, debtor_id: str, amount: float) ->
         if remaining <= 0:
             break
         if debt_amount <= remaining:
-            # Погашаем весь долг
             c.execute('UPDATE debts SET repaid = 1 WHERE id = ?', (row_id,))
             remaining -= debt_amount
             updated = True
         else:
-            # Частичное погашение: уменьшаем сумму долга
             new_amount = debt_amount - remaining
             c.execute('UPDATE debts SET amount = ? WHERE id = ?', (new_amount, row_id))
             remaining = 0
@@ -49,18 +49,18 @@ def repay_debt(chat_id: str, creditor_id: str, debtor_id: str, amount: float) ->
 
 def get_debts_for_user(chat_id: str, user_id: str) -> str:
     """
-    Возвращает форматированный список долгов пользователя.
+    Возвращает список долгов пользователя.
     """
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # Долги, где я должник (debtor_id)
+    # Долги, где я должник (я должен кому-то)
     c.execute('''
         SELECT creditor_name, amount, description FROM debts
         WHERE chat_id = ? AND debtor_id = ? AND repaid = 0
         ORDER BY date ASC
     ''', (chat_id, user_id))
     i_owe = c.fetchall()
-    # Долги, где я кредитор (creditor_id)
+    # Долги, где я кредитор (мне должны)
     c.execute('''
         SELECT debtor_name, amount, description FROM debts
         WHERE chat_id = ? AND creditor_id = ? AND repaid = 0
@@ -73,20 +73,18 @@ def get_debts_for_user(chat_id: str, user_id: str) -> str:
         return "📭 Нет активных долгов."
 
     lines = []
-    # Долги, которые мне должны
-    if owe_me:
-        lines.append("📌 *Вам должны:*")
-        total_owe_me = 0
-        for debtor, amt, desc in owe_me:
-            lines.append(f"• {debtor}: {amt:.2f} руб. ({desc})")
-            total_owe_me += amt
-        lines.append(f"   *Итого:* {total_owe_me:.2f} руб.")
-    # Долги, которые я должен
     if i_owe:
         lines.append("📌 *Вы должны:*")
-        total_i_owe = 0
+        total_i_owe = 0.0
         for creditor, amt, desc in i_owe:
             lines.append(f"• {creditor}: {amt:.2f} руб. ({desc})")
             total_i_owe += amt
         lines.append(f"   *Итого:* {total_i_owe:.2f} руб.")
+    if owe_me:
+        lines.append("📌 *Вам должны:*")
+        total_owe_me = 0.0
+        for debtor, amt, desc in owe_me:
+            lines.append(f"• {debtor}: {amt:.2f} руб. ({desc})")
+            total_owe_me += amt
+        lines.append(f"   *Итого:* {total_owe_me:.2f} руб.")
     return "\n".join(lines)
