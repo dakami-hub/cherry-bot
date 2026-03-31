@@ -128,6 +128,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Вести долги (!должен, !вернул, !долги)\n"
         "• Скачивать видео/аудио (ссылка или !звук ссылка) с TikTok, VK, YouTube\n"
         "• Общаться как человек (в режиме cherry) или через !ии (в любом режиме)\n"
+        "• Получать ответ с интернетом через !smart\n"
         "• Озвучивать ответы (автоматически или !озвучь)\n\n"
         "Команды: /start, /clear, /help, !команды"
     )
@@ -172,6 +173,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             "`!звук ссылка` — скачать аудио из видео (TikTok, VK, YouTube)\n"
             "`!озвучь` — озвучить последний ответ\n"
             "`!ии текст` — поговорить с обычным ИИ (в любом режиме)\n"
+            "`!smart текст` — получить ответ с поиском в интернете\n"
             "`!режим [cherry/normal]` — сменить режим (только админ)\n"
             "`!шанс [0-100]` — сменить шанс ответа (только админ)\n"
             "`!голосшанс [0-100]` — сменить шанс голосового ответа (только админ)\n"
@@ -248,6 +250,27 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         reply = await ai.get_normal_response(chat_id, user_id, query)
         last_ai_reply[user_id] = reply
         await update.message.reply_text(reply)
+
+    # ---------- !smart (умный ассистент с интернетом) ----------
+    elif cmd == "smart":
+        query = None
+        if args:
+            query = ' '.join(args)
+        elif update.message.reply_to_message:
+            query = update.message.reply_to_message.text
+        if not query:
+            await update.message.reply_text("Напиши: !smart вопрос (или ответь на сообщение)")
+            return
+        await send_typing(update, context)
+        await update.message.reply_text("🔍 Ищу в интернете...")
+        try:
+            answer = await ai.get_smart_response(query)
+            # Сохраняем для возможного озвучивания
+            last_ai_reply[str(update.effective_user.id)] = answer
+            await update.message.reply_text(answer)
+        except Exception as e:
+            logger.error(f"Smart command error: {e}")
+            await update.message.reply_text("❌ Не удалось получить ответ. Попробуй позже.")
 
     # ---------- !тр ----------
     elif cmd == "тр":
@@ -362,7 +385,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
     elif cmd == "озвучь":
         user_id = str(update.effective_user.id)
         if user_id not in last_ai_reply:
-            await update.message.reply_text("Сначала получи ответ от ИИ (через !ии или в режиме cherry).")
+            await update.message.reply_text("Сначала получи ответ от ИИ (через !ии, !smart или в режиме cherry).")
             return
         text_to_say = last_ai_reply[user_id]
         await send_typing(update, context)
@@ -377,7 +400,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("Не удалось создать голосовое сообщение.")
 
     else:
-        pass
+        pass  # неизвестная команда
 
 # ------------------------------------------------------------
 # Автоскачивание видео
