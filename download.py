@@ -4,9 +4,9 @@ import logging
 import shutil
 import glob
 
-COOKIES_FILE = "cookies.txt"
-
 def get_ffmpeg_path():
+    """Ищет ffmpeg в системе."""
+    # Поиск в nix store (для Railway Nixpack)
     ffmpeg_candidates = glob.glob('/nix/store/*ffmpeg*/bin/ffmpeg')
     if ffmpeg_candidates:
         logging.info(f"Found ffmpeg via glob: {ffmpeg_candidates[0]}")
@@ -27,27 +27,20 @@ def get_ffmpeg_path():
     logging.error("ffmpeg not found!")
     return None
 
-def normalize_url(url: str) -> str:
-    if 'vk.ru' in url:
-        url = url.replace('vk.ru', 'vk.com')
-    return url
-
 def _get_common_opts():
     opts = {
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        'cookiefile': COOKIES_FILE,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-        'headers': {'Referer': 'https://vk.com/'},
     }
     ffmpeg_path = get_ffmpeg_path()
     if ffmpeg_path:
         opts['ffmpeg_location'] = ffmpeg_path
     return opts
 
-def download_video(url: str) -> str | None:
-    url = normalize_url(url)
+def download_tiktok_video(url: str) -> str | None:
+    """Скачивает видео из TikTok."""
     os.makedirs("downloads", exist_ok=True)
     opts = _get_common_opts()
     opts.update({
@@ -60,11 +53,11 @@ def download_video(url: str) -> str | None:
             info = ydl.extract_info(url, download=True)
             return ydl.prepare_filename(info)
     except Exception as e:
-        logging.error(f"Video download error: {e}")
+        logging.error(f"TikTok video download error: {e}")
         return None
 
-def download_audio(url: str) -> str | None:
-    url = normalize_url(url)
+def download_tiktok_audio(url: str) -> str | None:
+    """Скачивает аудио из TikTok (MP3)."""
     os.makedirs("downloads", exist_ok=True)
     opts = _get_common_opts()
     opts.update({
@@ -82,5 +75,5 @@ def download_audio(url: str) -> str | None:
             base = os.path.splitext(ydl.prepare_filename(info))[0]
             return base + '.mp3'
     except Exception as e:
-        logging.error(f"Audio download error: {e}")
+        logging.error(f"TikTok audio download error: {e}")
         return None
