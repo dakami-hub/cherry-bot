@@ -15,13 +15,14 @@ from keyboard import fix_keyboard, should_fix
 from tts import text_to_voice
 import debts as debts_module
 import ai
+from download import download_tiktok_video, download_tiktok_audio
 
 load_dotenv()
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 if not TOKEN:
     raise ValueError("No TELEGRAM_TOKEN in .env")
 
-DOWNLOADER_URL = os.environ.get("DOWNLOADER_URL")
+DOWNLOADER_URL = os.environ.get("DOWNLOADER_URL")          # пока не используется, оставим на будущее
 DOWNLOADER_SECRET = os.environ.get("DOWNLOADER_SECRET")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -65,60 +66,6 @@ def is_admin(user) -> bool:
     return user.username and user.username.lower() == ADMIN_USERNAME.lower()
 
 # ------------------------------------------------------------
-# Скачивание через внешний сервис
-def download_video(url: str) -> str | None:
-    if not DOWNLOADER_URL or not DOWNLOADER_SECRET:
-        logger.error("Downloader service not configured")
-        return None
-    try:
-        response = requests.get(
-            f"{DOWNLOADER_URL}/download",
-            params={"url": url, "audio": "false"},
-            headers={"Authorization": f"Bearer {DOWNLOADER_SECRET}"},
-            stream=True,
-            timeout=120
-        )
-        if response.status_code == 200:
-            os.makedirs("downloads", exist_ok=True)
-            filename = f"downloads/video_{abs(hash(url))}.mp4"
-            with open(filename, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            return filename
-        else:
-            logger.error(f"Downloader error: {response.status_code} {response.text}")
-            return None
-    except Exception as e:
-        logger.error(f"Downloader request failed: {e}")
-        return None
-
-def download_audio(url: str) -> str | None:
-    if not DOWNLOADER_URL or not DOWNLOADER_SECRET:
-        logger.error("Downloader service not configured")
-        return None
-    try:
-        response = requests.get(
-            f"{DOWNLOADER_URL}/download",
-            params={"url": url, "audio": "true"},
-            headers={"Authorization": f"Bearer {DOWNLOADER_SECRET}"},
-            stream=True,
-            timeout=120
-        )
-        if response.status_code == 200:
-            os.makedirs("downloads", exist_ok=True)
-            filename = f"downloads/audio_{abs(hash(url))}.mp3"
-            with open(filename, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            return filename
-        else:
-            logger.error(f"Downloader error: {response.status_code} {response.text}")
-            return None
-    except Exception as e:
-        logger.error(f"Downloader request failed: {e}")
-        return None
-
-# ------------------------------------------------------------
 # Команды /start, /help, /clear
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -126,11 +73,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Умею:\n"
         "• Исправлять раскладку (авто или !тр)\n"
         "• Вести долги (!должен, !вернул, !долги)\n"
-        "• Скачивать видео/аудио (ссылка или !звук ссылка) с TikTok, VK, YouTube\n"
+        "• Скачивать видео/аудио из TikTok (просто ссылка или !звук ссылка)\n"
         "• Общаться как человек (в режиме cherry) или через !ии (в любом режиме)\n"
         "• Получать ответ с интернетом через !smart\n"
         "• Озвучивать ответы (автоматически или !озвучь)\n\n"
-        "Команды: /start, /clear, /help, !команды"
+        "Команды: /start, /clear, /help, !команды\n"
+        "⚠️ VK и YouTube временно недоступны — в разработке."
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -170,7 +118,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             "`!должен @username сумма описание` — записать долг\n"
             "`!вернул @username сумма` — отметить возврат\n"
             "`!долги` — показать ваши долги\n"
-            "`!звук ссылка` — скачать аудио из видео (TikTok, VK, YouTube)\n"
+            "`!звук ссылка` — скачать аудио из TikTok\n"
             "`!озвучь` — озвучить последний ответ\n"
             "`!ии текст` — поговорить с обычным ИИ (в любом режиме)\n"
             "`!smart текст` — получить ответ с поиском в интернете\n"
@@ -265,7 +213,6 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("🔍 Ищу в интернете...")
         try:
             answer = await ai.get_smart_response(query)
-            # Сохраняем для возможного озвучивания
             last_ai_reply[str(update.effective_user.id)] = answer
             await update.message.reply_text(answer)
         except Exception as e:
@@ -364,22 +311,25 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("❗ Напиши: !звук ссылка_на_видео")
             return
         url = args[0]
-        if not re.search(r'(tiktok\.com|vm\.tiktok\.com|vk\.com/video|vk\.com/clip|vk\.ru|youtu\.be|youtube\.com)', url):
-            await update.message.reply_text("Ссылка должна быть на TikTok, VK или YouTube.")
-            return
-        await send_typing(update, context)
-        await update.message.reply_text("🎵 Скачиваю аудио...")
-        filepath = download_audio(url)
-        if filepath and os.path.exists(filepath):
-            try:
-                with open(filepath, 'rb') as f:
-                    await update.message.reply_audio(audio=f, title="audio.mp3")
-                os.remove(filepath)
-            except Exception as e:
-                logger.error(f"Send audio error: {e}")
-                await update.message.reply_text("Не удалось отправить аудио.")
+        # Проверяем тип ссылки
+        if re.search(r'(tiktok\.com|vm\.tiktok\.com)', url):
+            await send_typing(update, context)
+            await update.message.reply_text("🎵 Скачиваю аудио из TikTok...")
+            filepath = download_tiktok_audio(url)
+            if filepath and os.path.exists(filepath):
+                try:
+                    with open(filepath, 'rb') as f:
+                        await update.message.reply_audio(audio=f, title="audio.mp3")
+                    os.remove(filepath)
+                except Exception as e:
+                    logger.error(f"Send audio error: {e}")
+                    await update.message.reply_text("Не удалось отправить аудио.")
+            else:
+                await update.message.reply_text("Не удалось скачать аудио.")
+        elif re.search(r'(vk\.com/video|vk\.com/clip|vk\.ru|youtu\.be|youtube\.com)', url):
+            await update.message.reply_text("🔧 Функция скачивания аудио для VK и YouTube в разработке. Пока что можно скачивать только TikTok.")
         else:
-            await update.message.reply_text("Не удалось скачать аудио.")
+            await update.message.reply_text("Ссылка должна быть на TikTok (tiktok.com или vm.tiktok.com)")
 
     # ---------- !озвучь ----------
     elif cmd == "озвучь":
@@ -403,33 +353,41 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         pass  # неизвестная команда
 
 # ------------------------------------------------------------
-# Автоскачивание видео
+# Автоскачивание видео из TikTok
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     url_match = re.search(r'(https?://\S+)', text)
     if not url_match:
         return
     url = url_match.group(0)
-    if not re.search(r'(tiktok\.com|vm\.tiktok\.com|vk\.com/video|vk\.com/clip|vk\.ru|youtu\.be|youtube\.com)', url):
-        return
-    if text.startswith('!звук'):
-        return
-    await send_typing(update, context)
-    await update.message.reply_text("📥 Скачиваю видео...")
-    filepath = download_video(url)
-    if filepath and os.path.exists(filepath):
-        try:
-            with open(filepath, 'rb') as f:
-                await update.message.reply_video(video=f, caption="Смотри, пока не удалили")
-            os.remove(filepath)
-        except Exception as e:
-            logger.error(f"Send video error: {e}")
-            await update.message.reply_text("Не удалось отправить видео.")
+
+    # Обрабатываем только TikTok
+    if re.search(r'(tiktok\.com|vm\.tiktok\.com)', url):
+        # Если это команда !звук, не обрабатываем здесь
+        if text.startswith('!звук'):
+            return
+        await send_typing(update, context)
+        await update.message.reply_text("📥 Скачиваю видео из TikTok...")
+        filepath = download_tiktok_video(url)
+        if filepath and os.path.exists(filepath):
+            try:
+                with open(filepath, 'rb') as f:
+                    await update.message.reply_video(video=f, caption="Смотри, пока не удалили")
+                os.remove(filepath)
+            except Exception as e:
+                logger.error(f"Send video error: {e}")
+                await update.message.reply_text("Не удалось отправить видео.")
+        else:
+            await update.message.reply_text("Не удалось скачать видео. Проверь ссылку.")
+    # Заглушка для других платформ
+    elif re.search(r'(vk\.com/video|vk\.com/clip|vk\.ru|youtu\.be|youtube\.com)', url):
+        await update.message.reply_text("🔧 Функция скачивания для VK и YouTube в разработке. Пока что можно скачивать только TikTok.")
     else:
-        await update.message.reply_text("Не удалось скачать видео. Проверь ссылку.")
+        # Не наша ссылка — игнорируем
+        return
 
 # ------------------------------------------------------------
-# Автоисправление раскладки (с использованием Groq для длинных текстов)
+# Автоисправление раскладки
 async def auto_fix_layout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if not text or text.startswith('!'):
