@@ -22,7 +22,7 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 if not TOKEN:
     raise ValueError("No TELEGRAM_TOKEN in .env")
 
-DOWNLOADER_URL = os.environ.get("DOWNLOADER_URL")          # не используется, оставлено для совместимости
+DOWNLOADER_URL = os.environ.get("DOWNLOADER_URL")          # не используется
 DOWNLOADER_SECRET = os.environ.get("DOWNLOADER_SECRET")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -475,4 +475,5 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if filepath and os.path.exists(filepath):
             try:
                 with open(filepath, 'rb') as f:
-                    await update.message.reply_video(video=f, caption="Смотри, пок
+                    await update.message.reply_video(video=f, caption="Смотри, пока не удалили")
+              
