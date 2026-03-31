@@ -28,7 +28,7 @@ DOWNLOADER_SECRET = os.environ.get("DOWNLOADER_SECRET")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-SUPERADMIN_USERNAME = "dakamiwannadielmaowhatabozo"
+SUPERADMIN_USERNAME = "dakamiwannadielmaowhatabozo"  # замените при необходимости
 
 last_ai_reply = {}
 init_db()
@@ -36,7 +36,8 @@ init_db()
 # ------------------------------------------------------------
 # Настройки
 def get_mode(chat_id: str) -> str:
-    return get_setting(chat_id, "mode", "cherry")
+    # Изменено: по умолчанию normal
+    return get_setting(chat_id, "mode", "normal")
 
 def set_mode(chat_id: str, mode: str):
     set_setting(chat_id, "mode", mode)
@@ -70,6 +71,8 @@ async def send_typing(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🍒 Привет! Я Черри.\n"
+        "По умолчанию я в режиме *normal* — не отвечаю сама, только по командам.\n"
+        "Чтобы включить мой токсичный режим, администратор может использовать `!режим cherry`.\n\n"
         "Умею:\n"
         "• Исправлять раскладку (авто или !тр)\n"
         "• Вести долги (!должен, !вернул, !долги)\n"
@@ -78,7 +81,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Получать ответ с интернетом через !smart\n"
         "• Озвучивать ответы (автоматически или !озвучь)\n\n"
         "Команды: /start, /clear, /help, !команды\n"
-        "⚠️ VK и YouTube временно недоступны — в разработке."
+        "⚠️ VK и YouTube временно недоступны — в разработке.",
+        parse_mode='Markdown'
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -133,6 +137,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             "`!режим [cherry/normal]` — сменить режим (админы)\n"
             "`!шанс [0-100]` — сменить шанс ответа (админы)\n"
             "`!голосшанс [0-100]` — сменить шанс голосового ответа (админы)\n"
+            "`!узнатьид @username` — показать ID пользователя\n"
             "`!датьправа @username` — добавить мини-админа (суперадмин)\n"
             "`!забратьправа @username` — удалить мини-админа (суперадмин)\n"
             "`!админы` — список админов (суперадмин)\n"
@@ -195,13 +200,10 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         except Exception as e:
             await update.message.reply_text("Укажи число от 0 до 100")
 
-    # ---------- !датьправа ----------
-    elif cmd == "датьправа":
-        if not is_superadmin(user_id):
-            await update.message.reply_text("⛔ Только для суперадмина.")
-            return
+    # ---------- !узнатьид ----------
+    elif cmd == "узнатьид":
         if not args:
-            await update.message.reply_text("❗ Укажи пользователя: !датьправа @username")
+            await update.message.reply_text("❗ Укажи пользователя: !узнатьид @username")
             return
         mention = args[0]
         if not mention.startswith('@'):
@@ -210,12 +212,46 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         target_username = mention[1:]
         try:
             member = await context.bot.get_chat_member(update.effective_chat.id, mention)
-            target_id = str(member.user.id)
+            target_id = member.user.id
             target_name = member.user.full_name
+            await update.message.reply_text(f"ID пользователя {target_name} (@{target_username}): `{target_id}`", parse_mode='Markdown')
         except Exception as e:
-            await update.message.reply_text("Не удалось найти пользователя в этом чате.")
+            await update.message.reply_text("❌ Не удалось найти пользователя в этом чате. Убедитесь, что он участник, и бот имеет права администратора.")
+
+    # ---------- !датьправа ----------
+    elif cmd == "датьправа":
+        if not is_superadmin(user_id):
+            await update.message.reply_text("⛔ Только для суперадмина.")
             return
-        add_admin(target_id, target_username, "admin")
+        if not args:
+            await update.message.reply_text("❗ Укажи пользователя: !датьправа @username (или ID, если известен)")
+            return
+        mention = args[0]
+        target_id = None
+        target_name = None
+        # Попробуем как username
+        if mention.startswith('@'):
+            try:
+                member = await context.bot.get_chat_member(update.effective_chat.id, mention)
+                target_id = str(member.user.id)
+                target_name = member.user.full_name
+            except Exception as e:
+                await update.message.reply_text(
+                    "❌ Не удалось найти пользователя в этом чате.\n"
+                    "Убедитесь, что:\n"
+                    "1. Пользователь является участником этого чата.\n"
+                    "2. Бот имеет права администратора (для получения информации).\n"
+                    "3. Вы правильно указали username (без опечаток).\n\n"
+                    "Если проблема сохраняется, попросите пользователя написать боту в личные сообщения, "
+                    "затем используйте команду `!узнатьид @username`, чтобы получить его ID, и повторите команду с ID:\n"
+                    "`!датьправа <ID>`"
+                )
+                return
+        else:
+            # предполагаем, что это ID
+            target_id = mention
+            target_name = f"пользователь {target_id}"
+        add_admin(target_id, target_name, "admin")
         await update.message.reply_text(f"✅ Пользователь {target_name} добавлен в админы.")
 
     # ---------- !забратьправа ----------
@@ -224,24 +260,24 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("⛔ Только для суперадмина.")
             return
         if not args:
-            await update.message.reply_text("❗ Укажи пользователя: !забратьправа @username")
+            await update.message.reply_text("❗ Укажи пользователя: !забратьправа @username (или ID)")
             return
         mention = args[0]
-        if not mention.startswith('@'):
-            await update.message.reply_text("Укажи пользователя через @username")
-            return
-        target_username = mention[1:]
-        try:
-            member = await context.bot.get_chat_member(update.effective_chat.id, mention)
-            target_id = str(member.user.id)
-        except Exception as e:
-            await update.message.reply_text("Не удалось найти пользователя в этом чате.")
-            return
+        target_id = None
+        if mention.startswith('@'):
+            try:
+                member = await context.bot.get_chat_member(update.effective_chat.id, mention)
+                target_id = str(member.user.id)
+            except Exception as e:
+                await update.message.reply_text("Не удалось найти пользователя в этом чате. Укажите ID.")
+                return
+        else:
+            target_id = mention
         if is_superadmin(target_id):
             await update.message.reply_text("❌ Нельзя удалить суперадмина.")
             return
         remove_admin(target_id)
-        await update.message.reply_text(f"✅ Пользователь @{target_username} удалён из админов.")
+        await update.message.reply_text(f"✅ Пользователь {target_id} удалён из админов.")
 
     # ---------- !админы ----------
     elif cmd == "админы":
@@ -275,10 +311,10 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             "   • По умолчанию 40%. Влияет на случайные ответы.\n\n"
             "`!голосшанс [0-100]` — установить вероятность отправки голосового ответа.\n"
             "   • По умолчанию 30%. Применяется к ответам Черри и !ии.\n\n"
+            "`!узнатьид @username` — получить числовой ID пользователя (для выдачи прав, если бот не видит username).\n"
             "`!датьправа @username` — добавить пользователя в мини-админы (только суперадмин).\n"
-            "   • Мини-админ может менять настройки бота в любом чате.\n\n"
-            "`!забратьправа @username` — удалить пользователя из мини-админов.\n\n"
-            "`!админы` — показать список всех администраторов.\n\n"
+            "`!забратьправа @username` — удалить пользователя из мини-админов.\n"
+            "`!админы` — показать список всех администраторов.\n"
             "`!админкоманды` — этот список.\n\n"
             "💡 *Обычные команды (доступны всем):*\n"
             "`!тр [текст]` — исправить раскладку\n"
@@ -431,126 +467,4 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
                     logger.error(f"Send audio error: {e}")
                     await update.message.reply_text("Не удалось отправить аудио.")
             else:
-                await update.message.reply_text("Не удалось скачать аудио.")
-        elif re.search(r'(vk\.com/video|vk\.com/clip|vk\.ru|youtu\.be|youtube\.com)', url):
-            await update.message.reply_text("🔧 Функция скачивания аудио для VK и YouTube в разработке. Пока что можно скачивать только TikTok.")
-        else:
-            await update.message.reply_text("Ссылка должна быть на TikTok (tiktok.com или vm.tiktok.com)")
-
-    # ---------- !озвучь ----------
-    elif cmd == "озвучь":
-        if user_id not in last_ai_reply:
-            await update.message.reply_text("Сначала получи ответ от ИИ (через !ии, !smart или в режиме cherry).")
-            return
-        text_to_say = last_ai_reply[user_id]
-        await send_typing(update, context)
-        try:
-            voice_file = f"voice_{user_id}.mp3"
-            await text_to_voice(text_to_say, voice_file)
-            with open(voice_file, 'rb') as vf:
-                await update.message.reply_voice(voice=vf)
-            os.remove(voice_file)
-        except Exception as e:
-            logger.error(f"Voice command error: {e}")
-            await update.message.reply_text("Не удалось создать голосовое сообщение.")
-
-    else:
-        pass
-
-# ------------------------------------------------------------
-# Автоскачивание видео
-async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    url_match = re.search(r'(https?://\S+)', text)
-    if not url_match:
-        return
-    url = url_match.group(0)
-
-    if re.search(r'(tiktok\.com|vm\.tiktok\.com)', url):
-        if text.startswith('!звук'):
-            return
-        await send_typing(update, context)
-        await update.message.reply_text("📥 Скачиваю видео из TikTok...")
-        filepath = download_tiktok_video(url)
-        if filepath and os.path.exists(filepath):
-            try:
-                with open(filepath, 'rb') as f:
-                    await update.message.reply_video(video=f, caption="Смотри, пока не удалили")
-                os.remove(filepath)
-            except Exception as e:
-                logger.error(f"Send video error: {e}")
-                await update.message.reply_text("Не удалось отправить видео.")
-        else:
-            await update.message.reply_text("Не удалось скачать видео. Проверь ссылку.")
-    elif re.search(r'(vk\.com/video|vk\.com/clip|vk\.ru|youtu\.be|youtube\.com)', url):
-        await update.message.reply_text("🔧 Функция скачивания для VK и YouTube в разработке. Пока что можно скачивать только TikTok.")
-    else:
-        return
-
-# ------------------------------------------------------------
-# Автоисправление раскладки
-async def auto_fix_layout(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if not text or text.startswith('!'):
-        return
-    if await should_fix(text):
-        fixed = fix_keyboard(text)
-        if fixed != text:
-            await update.message.reply_text(f"🔁 Возможно, вы имели в виду: {fixed}")
-
-# ------------------------------------------------------------
-# Режим Черри
-async def cherry_mode_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if not text or text.startswith('!'):
-        return
-    if re.search(r'(https?://\S+)', text):
-        return
-
-    chat_id = str(update.effective_chat.id)
-    if get_mode(chat_id) != "cherry":
-        return
-
-    user_id = str(update.effective_user.id)
-    is_named = "черри" in text.lower()
-    is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
-    chance = get_response_chance(chat_id)
-
-    if is_named or is_reply or random.random() < chance:
-        await send_typing(update, context)
-        reply = await ai.get_cherry_response(chat_id, user_id, text)
-        last_ai_reply[user_id] = reply
-
-        voice_chance = get_voice_chance(chat_id)
-        if random.random() < voice_chance:
-            try:
-                voice_file = f"voice_{user_id}.mp3"
-                await text_to_voice(reply, voice_file)
-                with open(voice_file, 'rb') as vf:
-                    await update.message.reply_voice(voice=vf)
-                os.remove(voice_file)
-            except Exception as e:
-                logger.error(f"Voice error: {e}")
-                await update.message.reply_text(reply)
-        else:
-            await update.message.reply_text(reply)
-
-# ------------------------------------------------------------
-def main():
-    app = Application.builder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("clear", clear_ai_history))
-
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^!'), handle_prefix_commands))
-
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url), group=0)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_fix_layout), group=1)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cherry_mode_response), group=2)
-
-    logger.info("Cherry Bot запущен")
-    app.run_polling(drop_pending_updates=True)
-
-if __name__ == "__main__":
-    main()
+                
