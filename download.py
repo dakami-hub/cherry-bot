@@ -7,18 +7,14 @@ import glob
 COOKIES_FILE = "cookies.txt"
 
 def get_ffmpeg_path():
-    """Ищет ffmpeg в системе."""
-    # Поиск в nix store (для Railway Nixpack)
     ffmpeg_candidates = glob.glob('/nix/store/*ffmpeg*/bin/ffmpeg')
     if ffmpeg_candidates:
         logging.info(f"Found ffmpeg via glob: {ffmpeg_candidates[0]}")
         return ffmpeg_candidates[0]
-    # shutil.which
     ffmpeg_path = shutil.which('ffmpeg')
     if ffmpeg_path:
         logging.info(f"Found ffmpeg via which: {ffmpeg_path}")
         return ffmpeg_path
-    # Фиксированные пути
     possible_paths = [
         '/usr/bin/ffmpeg',
         '/usr/local/bin/ffmpeg',
@@ -31,14 +27,19 @@ def get_ffmpeg_path():
     logging.error("ffmpeg not found!")
     return None
 
+def normalize_url(url: str) -> str:
+    if 'vk.ru' in url:
+        url = url.replace('vk.ru', 'vk.com')
+    return url
+
 def _get_common_opts():
-    """Базовые опции для yt-dlp."""
     opts = {
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
         'cookiefile': COOKIES_FILE,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        'headers': {'Referer': 'https://vk.com/'},
     }
     ffmpeg_path = get_ffmpeg_path()
     if ffmpeg_path:
@@ -46,7 +47,7 @@ def _get_common_opts():
     return opts
 
 def download_video(url: str) -> str | None:
-    """Скачивает видео в mp4 (до 50МБ, 720p)."""
+    url = normalize_url(url)
     os.makedirs("downloads", exist_ok=True)
     opts = _get_common_opts()
     opts.update({
@@ -63,7 +64,7 @@ def download_video(url: str) -> str | None:
         return None
 
 def download_audio(url: str) -> str | None:
-    """Скачивает аудио в mp3."""
+    url = normalize_url(url)
     os.makedirs("downloads", exist_ok=True)
     opts = _get_common_opts()
     opts.update({
