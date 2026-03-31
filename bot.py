@@ -34,7 +34,7 @@ last_ai_reply = {}
 init_db()
 
 # ------------------------------------------------------------
-# Настройки (привязаны к чату)
+# Настройки
 def get_mode(chat_id: str) -> str:
     return get_setting(chat_id, "mode", "cherry")
 
@@ -56,9 +56,8 @@ def set_voice_chance(chat_id: str, chance: float):
     set_setting(chat_id, "voice_chance", str(chance))
 
 # ------------------------------------------------------------
-# Проверка прав администратора
+# Проверка прав
 def has_admin_rights(user_id: str) -> bool:
-    """Возвращает True, если пользователь суперадмин или мини-админ."""
     return is_superadmin(user_id) or is_admin(user_id)
 
 async def send_typing(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -67,7 +66,7 @@ async def send_typing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ------------------------------------------------------------
-# Команды /start, /help, /clear
+# Команды
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🍒 Привет! Я Черри.\n"
@@ -97,7 +96,7 @@ async def clear_ai_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🧠 История диалога очищена.")
 
 # ------------------------------------------------------------
-# Обработчик всех команд с !
+# Обработчик команд с !
 async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     if not text.startswith('!'):
@@ -110,13 +109,13 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
     user_id = str(update.effective_user.id)
     user = update.effective_user
 
-    # Автоматическое добавление суперадмина по username при первой команде
+    # Автоматическое добавление суперадмина
     if user.username and user.username.lower() == SUPERADMIN_USERNAME.lower():
         if not is_superadmin(user_id):
             add_admin(user_id, user.username, "superadmin")
             logger.info(f"Added superadmin {user.username} ({user_id})")
 
-    # ---------- !команды (краткая справка) ----------
+    # ---------- !команды ----------
     if cmd in ["команды", "help", "помощь"]:
         mode = get_mode(chat_id)
         resp_chance = int(get_response_chance(chat_id) * 100)
@@ -129,14 +128,14 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             "`!долги` — показать ваши долги\n"
             "`!звук ссылка` — скачать аудио из TikTok\n"
             "`!озвучь` — озвучить последний ответ\n"
-            "`!ии текст` — поговорить с обычным ИИ (в любом режиме)\n"
-            "`!smart текст` — получить ответ с поиском в интернете\n"
-            "`!режим [cherry/normal]` — сменить режим (только админы)\n"
-            "`!шанс [0-100]` — сменить шанс ответа (только админы)\n"
-            "`!голосшанс [0-100]` — сменить шанс голосового ответа (только админы)\n"
-            "`!датьправа @username` — добавить мини-админа (только суперадмин)\n"
-            "`!забратьправа @username` — удалить мини-админа (только суперадмин)\n"
-            "`!админы` — список админов (только суперадмин)\n"
+            "`!ии текст` — поговорить с обычным ИИ\n"
+            "`!smart текст` — ответ с поиском в интернете\n"
+            "`!режим [cherry/normal]` — сменить режим (админы)\n"
+            "`!шанс [0-100]` — сменить шанс ответа (админы)\n"
+            "`!голосшанс [0-100]` — сменить шанс голосового ответа (админы)\n"
+            "`!датьправа @username` — добавить мини-админа (суперадмин)\n"
+            "`!забратьправа @username` — удалить мини-админа (суперадмин)\n"
+            "`!админы` — список админов (суперадмин)\n"
             "`!админкоманды` — подробная справка для админов\n"
             "`!команды` — этот список\n\n"
             f"*Текущий режим:* {mode}\n"
@@ -145,7 +144,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             parse_mode='Markdown'
         )
 
-    # ---------- !режим (только админы) ----------
+    # ---------- !режим ----------
     elif cmd == "режим":
         if not has_admin_rights(user_id):
             await update.message.reply_text("⛔ Только для администраторов.")
@@ -160,7 +159,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         set_mode(chat_id, new_mode)
         await update.message.reply_text(f"✅ Режим изменён на {new_mode} для этого чата")
 
-    # ---------- !шанс (только админы) ----------
+    # ---------- !шанс ----------
     elif cmd == "шанс":
         if not has_admin_rights(user_id):
             await update.message.reply_text("⛔ Только для администраторов.")
@@ -178,7 +177,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         except:
             await update.message.reply_text("Укажи число от 0 до 100")
 
-    # ---------- !голосшанс (только админы) ----------
+    # ---------- !голосшанс ----------
     elif cmd == "голосшанс":
         if not has_admin_rights(user_id):
             await update.message.reply_text("⛔ Только для администраторов.")
@@ -196,7 +195,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         except:
             await update.message.reply_text("Укажи число от 0 до 100")
 
-    # ---------- !датьправа (только суперадмин) ----------
+    # ---------- !датьправа ----------
     elif cmd == "датьправа":
         if not is_superadmin(user_id):
             await update.message.reply_text("⛔ Только для суперадмина.")
@@ -219,7 +218,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         add_admin(target_id, target_username, "admin")
         await update.message.reply_text(f"✅ Пользователь {target_name} добавлен в админы.")
 
-    # ---------- !забратьправа (только суперадмин) ----------
+    # ---------- !забратьправа ----------
     elif cmd == "забратьправа":
         if not is_superadmin(user_id):
             await update.message.reply_text("⛔ Только для суперадмина.")
@@ -244,7 +243,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         remove_admin(target_id)
         await update.message.reply_text(f"✅ Пользователь @{target_username} удалён из админов.")
 
-    # ---------- !админы (только суперадмин) ----------
+    # ---------- !админы ----------
     elif cmd == "админы":
         if not is_superadmin(user_id):
             await update.message.reply_text("⛔ Только для суперадмина.")
@@ -262,7 +261,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
                 lines.append(f"🔹 {name}")
         await update.message.reply_text("\n".join(lines), parse_mode='Markdown')
 
-    # ---------- !админкоманды (только админы) ----------
+    # ---------- !админкоманды ----------
     elif cmd == "админкоманды":
         if not has_admin_rights(user_id):
             await update.message.reply_text("⛔ Только для администраторов.")
@@ -295,7 +294,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         )
         await update.message.reply_text(admin_help_text, parse_mode='Markdown')
 
-    # ---------- !ии (обычный ассистент) ----------
+    # ---------- !ии ----------
     elif cmd == "ии":
         query = None
         if args:
@@ -310,7 +309,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         last_ai_reply[user_id] = reply
         await update.message.reply_text(reply)
 
-    # ---------- !smart (умный ассистент с интернетом) ----------
+    # ---------- !smart ----------
     elif cmd == "smart":
         query = None
         if args:
@@ -410,10 +409,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
 
     # ---------- !долги ----------
     elif cmd == "долги":
-        debts_str = debts_module.get_debts_for_user(
-            chat_id,
-            user_id
-        )
+        debts_str = debts_module.get_debts_for_user(chat_id, user_id)
         await update.message.reply_text(debts_str, parse_mode='Markdown')
 
     # ---------- !звук ----------
@@ -459,13 +455,24 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("Не удалось создать голосовое сообщение.")
 
     else:
-        pass  # неизвестная команда
+        pass
 
 # ------------------------------------------------------------
-# Автоскачивание видео из TikTok
+# Автоскачивание видео
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     url_match = re.search(r'(https?://\S+)', text)
     if not url_match:
         return
-    url = u
+    url = url_match.group(0)
+
+    if re.search(r'(tiktok\.com|vm\.tiktok\.com)', url):
+        if text.startswith('!звук'):
+            return
+        await send_typing(update, context)
+        await update.message.reply_text("📥 Скачиваю видео из TikTok...")
+        filepath = download_tiktok_video(url)
+        if filepath and os.path.exists(filepath):
+            try:
+                with open(filepath, 'rb') as f:
+                    await update.message.reply_video(video=f, caption="Смотри, пок
