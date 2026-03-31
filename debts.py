@@ -13,7 +13,6 @@ def add_debt(chat_id: str, creditor_id: str, creditor_name: str,
     conn.close()
 
 def repay_debt(chat_id: str, creditor_id: str, debtor_id: str, amount: float) -> bool:
-    """Отмечает долг как возвращённый (ищет точную сумму)."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''
@@ -31,17 +30,14 @@ def repay_debt(chat_id: str, creditor_id: str, debtor_id: str, amount: float) ->
     return False
 
 def get_debts_for_user(chat_id: str, user_id: str) -> str:
-    """Возвращает форматированный список долгов, где user_id участвует."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # Долги, где я должник
     c.execute('''
         SELECT creditor_name, SUM(amount) FROM debts
         WHERE chat_id = ? AND debtor_id = ? AND repaid = 0
         GROUP BY creditor_id
     ''', (chat_id, user_id))
     i_owe = c.fetchall()
-    # Долги, где я кредитор
     c.execute('''
         SELECT debtor_name, SUM(amount) FROM debts
         WHERE chat_id = ? AND creditor_id = ? AND repaid = 0
