@@ -174,7 +174,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
                 raise ValueError
             set_response_chance(chat_id, val / 100.0)
             await update.message.reply_text(f"✅ Шанс ответа изменён на {val}% для этого чата")
-        except:
+        except Exception as e:
             await update.message.reply_text("Укажи число от 0 до 100")
 
     # ---------- !голосшанс ----------
@@ -192,7 +192,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
                 raise ValueError
             set_voice_chance(chat_id, val / 100.0)
             await update.message.reply_text(f"✅ Шанс голосового ответа изменён на {val}% для этого чата")
-        except:
+        except Exception as e:
             await update.message.reply_text("Укажи число от 0 до 100")
 
     # ---------- !датьправа ----------
@@ -212,7 +212,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             member = await context.bot.get_chat_member(update.effective_chat.id, mention)
             target_id = str(member.user.id)
             target_name = member.user.full_name
-        except:
+        except Exception as e:
             await update.message.reply_text("Не удалось найти пользователя в этом чате.")
             return
         add_admin(target_id, target_username, "admin")
@@ -234,7 +234,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         try:
             member = await context.bot.get_chat_member(update.effective_chat.id, mention)
             target_id = str(member.user.id)
-        except:
+        except Exception as e:
             await update.message.reply_text("Не удалось найти пользователя в этом чате.")
             return
         if is_superadmin(target_id):
@@ -364,7 +364,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             member = await context.bot.get_chat_member(update.effective_chat.id, mention)
             debtor_id = str(member.user.id)
             debtor_name = member.user.full_name
-        except:
+        except Exception as e:
             pass
         debts_module.add_debt(
             chat_id,
@@ -394,7 +394,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         try:
             member = await context.bot.get_chat_member(update.effective_chat.id, mention)
             creditor_id = str(member.user.id)
-        except:
+        except Exception as e:
             pass
         success = debts_module.repay_debt(
             chat_id,
@@ -478,3 +478,79 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_video(video=f, caption="Смотри, пока не удалили")
                 os.remove(filepath)
             except Exception as e:
+                logger.error(f"Send video error: {e}")
+                await update.message.reply_text("Не удалось отправить видео.")
+        else:
+            await update.message.reply_text("Не удалось скачать видео. Проверь ссылку.")
+    elif re.search(r'(vk\.com/video|vk\.com/clip|vk\.ru|youtu\.be|youtube\.com)', url):
+        await update.message.reply_text("🔧 Функция скачивания для VK и YouTube в разработке. Пока что можно скачивать только TikTok.")
+    else:
+        return
+
+# ------------------------------------------------------------
+# Автоисправление раскладки
+async def auto_fix_layout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if not text or text.startswith('!'):
+        return
+    if await should_fix(text):
+        fixed = fix_keyboard(text)
+        if fixed != text:
+            await update.message.reply_text(f"🔁 Возможно, вы имели в виду: {fixed}")
+
+# ------------------------------------------------------------
+# Режим Черри
+async def cherry_mode_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if not text or text.startswith('!'):
+        return
+    if re.search(r'(https?://\S+)', text):
+        return
+
+    chat_id = str(update.effective_chat.id)
+    if get_mode(chat_id) != "cherry":
+        return
+
+    user_id = str(update.effective_user.id)
+    is_named = "черри" in text.lower()
+    is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
+    chance = get_response_chance(chat_id)
+
+    if is_named or is_reply or random.random() < chance:
+        await send_typing(update, context)
+        reply = await ai.get_cherry_response(chat_id, user_id, text)
+        last_ai_reply[user_id] = reply
+
+        voice_chance = get_voice_chance(chat_id)
+        if random.random() < voice_chance:
+            try:
+                voice_file = f"voice_{user_id}.mp3"
+                await text_to_voice(reply, voice_file)
+                with open(voice_file, 'rb') as vf:
+                    await update.message.reply_voice(voice=vf)
+                os.remove(voice_file)
+            except Exception as e:
+                logger.error(f"Voice error: {e}")
+                await update.message.reply_text(reply)
+        else:
+            await update.message.reply_text(reply)
+
+# ------------------------------------------------------------
+def main():
+    app = Application.builder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("clear", clear_ai_history))
+
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^!'), handle_prefix_commands))
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url), group=0)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_fix_layout), group=1)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cherry_mode_response), group=2)
+
+    logger.info("Cherry Bot запущен")
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
