@@ -5,8 +5,9 @@ import random
 import sqlite3
 import requests
 import shutil
+import json
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, filters, ContextTypes
 )
@@ -14,13 +15,15 @@ from telegram.constants import ChatAction
 
 from db import (
     init_db, get_setting, set_setting, add_admin, remove_admin,
-    is_admin, is_superadmin, get_all_admins, save_user, get_user_by_username, DB_PATH
+    is_admin, is_superadmin, get_all_admins, save_user, get_user_by_username, DB_PATH,
+    init_wordle_db, update_wordle_stats, get_wordle_stats, get_wordle_top
 )
 from keyboard import fix_keyboard, should_fix
 from tts import text_to_voice
 import debts as debts_module
 import ai
 from download import download_tiktok_video, download_tiktok_audio
+import wordle
 
 load_dotenv()
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -42,6 +45,7 @@ SUPERADMIN_USERNAME = "dakamiwannadielmaowhatabozo"    # запасной вар
 
 last_ai_reply = {}
 init_db()
+init_wordle_db()   # инициализация таблиц Wordle
 
 # ------------------------------------------------------------
 # Настройки
@@ -88,7 +92,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Скачивать видео/аудио из TikTok (просто ссылка или !звук ссылка)\n"
         "• Общаться как человек (в режиме cherry) или через !ии (в любом режиме)\n"
         "• Получать ответ с интернетом через !smart\n"
-        "• Озвучивать ответы (автоматически или !озвучь)\n\n"
+        "• Озвучивать ответы (автоматически или !озвучь)\n"
+        "• Играть в Wordle (!wordle)\n\n"
         "Команды: /start, /clear, /help, !команды\n"
         "⚠️ VK и YouTube временно недоступны — в разработке.",
         parse_mode='Markdown'
@@ -281,6 +286,9 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             "`!озвучь` — озвучить последний ответ\n"
             "`!ии текст` — поговорить с обычным ИИ\n"
             "`!smart текст` — ответ с поиском в интернете\n"
+            "`!wordle` — запустить игру Wordle в мини-приложении\n"
+            "`!wordle_статистика` — ваша статистика Wordle\n"
+            "`!wordle_топ` — топ игроков Wordle\n"
             "`!режим [cherry/normal]` — сменить режим (админы)\n"
             "`!шанс [0-100]` — сменить шанс ответа (админы)\n"
             "`!голосшанс [0-100]` — сменить шанс голосового ответа (админы)\n"
@@ -666,6 +674,41 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             logger.error(f"Voice command error: {e}")
             await update.message.reply_text("Не удалось создать голосовое сообщение.")
 
+    # ---------- !wordle ----------
+    elif cmd == "wordle":
+        webapp_url = "https://cherry-wordle-static-production.up.railway.app/"
+        keyboard = [[InlineKeyboardButton("🎮 Играть в Wordle", web_app={"url": webapp_url})]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("Запустите игру в мини-приложении:", reply_markup=reply_markup)
+
+    # ---------- !wordle_статистика ----------
+    elif cmd == "wordle_статистика":
+        stats = get_wordle_stats(user_id)
+        if not stats:
+            await update.message.reply_text("Вы ещё не играли в Wordle. Начните игру командой `!wordle`.", parse_mode='Markdown')
+        else:
+            username, games_played, games_won, total_guesses, current_streak, max_streak = stats
+            avg_guesses = total_guesses / games_won if games_won > 0 else 0
+            text = (f"📊 *Статистика Wordle*\n"
+                    f"Игр сыграно: {games_played}\n"
+                    f"Побед: {games_won}\n"
+                    f"Процент побед: {games_won/games_played*100:.1f}%\n"
+                    f"Среднее число попыток (при победе): {avg_guesses:.1f}\n"
+                    f"Текущая серия: {current_streak}\n"
+                    f"Максимальная серия: {max_streak}")
+            await update.message.reply_text(text, parse_mode='Markdown')
+
+    # ---------- !wordle_топ ----------
+    elif cmd == "wordle_топ":
+        top = get_wordle_top(10)
+        if not top:
+            await update.message.reply_text("Пока нет статистики. Сыграйте в Wordle!")
+        else:
+            text = "🏆 *Топ игроков Wordle по количеству побед:*\n"
+            for i, (username, wins, games, streak) in enumerate(top, 1):
+                text += f"{i}. {username}: {wins} побед ({games} игр), текущая серия: {streak}\n"
+            await update.message.reply_text(text, parse_mode='Markdown')
+
     else:
         pass
 
@@ -774,9 +817,94 @@ async def cherry_mode_response(update: Update, context: ContextTypes.DEFAULT_TYP
             await update.message.reply_text(reply)
 
 # ------------------------------------------------------------
+# Обработчик WebApp данных
+async def webapp_data_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.web_app_data:
+        return
+    user_id = str(update.effective_user.id)
+    data = update.message.web_app_data.data
+    try:
+        payload = json.loads(data)
+        action = payload.get('action')
+        if action == 'load':
+            session = wordle.get_wordle_session(user_id)
+            if session:
+                word, guesses_left, guessed_letters_json, _ = session
+                guessed_letters = json.loads(guessed_letters_json) if guessed_letters_json else []
+                colors = []
+                for g in guessed_letters:
+                    colors.append(wordle.check_guess(g, word))
+                response = {
+                    'guesses': guessed_letters,
+                    'colors': colors,
+                    'gameOver': False,
+                    'remaining': guesses_left
+                }
+            else:
+                wordle.create_new_game(user_id)
+                response = {
+                    'guesses': [],
+                    'colors': [],
+                    'gameOver': False,
+                    'remaining': wordle.MAX_GUESSES
+                }
+        elif action == 'guess':
+            guess = payload.get('guess', '').lower()
+            result, state, extra = wordle.process_guess(user_id, guess)
+            if result is None and state == 'invalid':
+                response = {'error': f'Слово "{guess}" не найдено в словаре.'}
+            elif result is None:
+                session = wordle.get_wordle_session(user_id)
+                word, guesses_left, guessed_letters_json, _ = session
+                guessed_letters = json.loads(guessed_letters_json) if guessed_letters_json else []
+                colors = []
+                for g in guessed_letters:
+                    colors.append(wordle.check_guess(g, word))
+                response = {
+                    'guesses': guessed_letters,
+                    'colors': colors,
+                    'gameOver': False,
+                    'remaining': guesses_left
+                }
+            elif result is True:
+                update_wordle_stats(user_id, update.effective_user.full_name or update.effective_user.username, True, extra)
+                response = {
+                    'guesses': wordle.get_guesses(user_id) or [],
+                    'colors': [],
+                    'gameOver': True,
+                    'won': True
+                }
+            else:
+                update_wordle_stats(user_id, update.effective_user.full_name or update.effective_user.username, False, 0)
+                response = {
+                    'guesses': wordle.get_guesses(user_id) or [],
+                    'colors': [],
+                    'gameOver': True,
+                    'won': False,
+                    'word': extra
+                }
+        elif action == 'new':
+            wordle.delete_wordle_session(user_id)
+            wordle.create_new_game(user_id)
+            response = {
+                'guesses': [],
+                'colors': [],
+                'gameOver': False,
+                'remaining': wordle.MAX_GUESSES
+            }
+        else:
+            response = {'error': 'Неизвестное действие'}
+    except Exception as e:
+        logging.error(f"WebApp error: {e}")
+        response = {'error': 'Ошибка обработки'}
+
+    await update.message.reply_text(json.dumps(response, ensure_ascii=False))
+
+# ------------------------------------------------------------
 def main():
     app = Application.builder().token(TOKEN).build()
 
+    # Сохраняем всех пользователей, кто пишет
     app.add_handler(MessageHandler(filters.ALL, save_user_handler), group=-1)
 
     app.add_handler(CommandHandler("start", start))
@@ -784,6 +912,9 @@ def main():
     app.add_handler(CommandHandler("clear", clear_ai_history))
 
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^!'), handle_prefix_commands))
+
+    # Обработчик WebApp (должен быть после команд)
+    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE & filters.WebAppData, webapp_data_handler))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url), group=0)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_fix_layout), group=1)
