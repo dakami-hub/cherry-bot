@@ -10,7 +10,7 @@ from telegram.ext import (
 from telegram.constants import ChatAction
 
 from db import init_db, get_setting, set_setting
-from keyboard import fix_keyboard
+from keyboard import fix_keyboard, should_fix
 from download import download_video, download_audio
 from tts import text_to_voice
 import debts as debts_module
@@ -24,26 +24,26 @@ if not TOKEN:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Администратор (замени на свой username или ID)
-ADMIN_USERNAME = "dakamiwannadielmaowhatabozo"  # без @
+# Администратор (замени на свой username без @)
+ADMIN_USERNAME = "dakamiwannadielmaowhatabozo"
 
 last_ai_reply = {}
 init_db()
 
 # ------------------------------------------------------------
-# Настройки из БД
-def get_mode() -> str:
-    return get_setting("mode", "cherry")
+# Функции для работы с настройками (привязаны к чату)
+def get_mode(chat_id: str) -> str:
+    return get_setting(chat_id, "mode", "cherry")
 
-def set_mode(mode: str):
-    set_setting("mode", mode)
+def set_mode(chat_id: str, mode: str):
+    set_setting(chat_id, "mode", mode)
 
-def get_response_chance() -> float:
-    val = get_setting("response_chance", "0.4")
+def get_response_chance(chat_id: str) -> float:
+    val = get_setting(chat_id, "response_chance", "0.4")
     return float(val)
 
-def set_response_chance(chance: float):
-    set_setting("response_chance", str(chance))
+def set_response_chance(chat_id: str, chance: float):
+    set_setting(chat_id, "response_chance", str(chance))
 
 # ------------------------------------------------------------
 async def send_typing(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -52,7 +52,6 @@ async def send_typing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 def is_admin(user) -> bool:
-    # можно также добавить проверку по user.id, но пока по username
     return user.username and user.username.lower() == ADMIN_USERNAME.lower()
 
 # ------------------------------------------------------------
@@ -64,7 +63,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Исправлять раскладку (авто или !тр)\n"
         "• Вести долги (!должен, !вернул, !долги)\n"
         "• Скачивать видео/аудио (ссылка или !звук ссылка)\n"
-        "• Общаться как человек (в режиме cherry) или через !ии (в режиме normal)\n"
+        "• Общаться как человек (в режиме cherry) или через !ии (в любом режиме)\n"
         "• Озвучивать ответы (!озвучь)\n\n"
         "Команды: /start, /clear, /help, !команды"
     )
@@ -93,11 +92,12 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
     parts = text.split()
     cmd = parts[0][1:].lower()
     args = parts[1:]
+    chat_id = str(update.effective_chat.id)
 
     # ---------- !команды ----------
     if cmd in ["команды", "help", "помощь"]:
-        mode = get_mode()
-        chance = int(get_response_chance() * 100)
+        mode = get_mode(chat_id)
+        chance = int(get_response_chance(chat_id) * 100)
         await update.message.reply_text(
             f"🍒 *Список команд:*\n"
             "`!тр [текст]` — исправить раскладку\n"
@@ -121,14 +121,14 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("⛔ Только для администратора.")
             return
         if not args:
-            await update.message.reply_text(f"Текущий режим: {get_mode()}. Используй: !режим cherry или !режим normal")
+            await update.message.reply_text(f"Текущий режим: {get_mode(chat_id)}. Используй: !режим cherry или !режим normal")
             return
         new_mode = args[0].lower()
         if new_mode not in ["cherry", "normal"]:
             await update.message.reply_text("Режим должен быть cherry или normal")
             return
-        set_mode(new_mode)
-        await update.message.reply_text(f"✅ Режим изменён на {new_mode}")
+        set_mode(chat_id, new_mode)
+        await update.message.reply_text(f"✅ Режим изменён на {new_mode} для этого чата")
 
     # ---------- !шанс (админ) ----------
     elif cmd == "шанс":
@@ -136,15 +136,15 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("⛔ Только для администратора.")
             return
         if not args:
-            curr = int(get_response_chance() * 100)
+            curr = int(get_response_chance(chat_id) * 100)
             await update.message.reply_text(f"Текущий шанс ответа: {curr}%")
             return
         try:
             val = float(args[0])
             if val < 0 or val > 100:
                 raise ValueError
-            set_response_chance(val / 100.0)
-            await update.message.reply_text(f"✅ Шанс ответа изменён на {val}%")
+            set_response_chance(chat_id, val / 100.0)
+            await update.message.reply_text(f"✅ Шанс ответа изменён на {val}% для этого чата")
         except:
             await update.message.reply_text("Укажи число от 0 до 100")
 
@@ -159,7 +159,6 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("Напиши: !ии текст (или ответь на сообщение)")
             return
         await send_typing(update, context)
-        chat_id = str(update.effective_chat.id)
         user_id = str(update.effective_user.id)
         reply = await ai.get_normal_response(chat_id, user_id, query)
         last_ai_reply[user_id] = reply
@@ -203,7 +202,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         except:
             pass
         debts_module.add_debt(
-            str(update.effective_chat.id),
+            chat_id,
             creditor_id, creditor_name,
             debtor_id, debtor_name,
             amount, description
@@ -233,7 +232,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         except:
             pass
         success = debts_module.repay_debt(
-            str(update.effective_chat.id),
+            chat_id,
             creditor_id,
             debtor_id,
             amount
@@ -246,7 +245,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
     # ---------- !долги ----------
     elif cmd == "долги":
         debts_str = debts_module.get_debts_for_user(
-            str(update.effective_chat.id),
+            chat_id,
             str(update.effective_user.id)
         )
         await update.message.reply_text(debts_str, parse_mode='Markdown')
@@ -322,14 +321,16 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Не удалось скачать видео. Проверь ссылку.")
 
 # ------------------------------------------------------------
-# Автоисправление раскладки
+# Автоисправление раскладки (с использованием Groq для длинных текстов)
 async def auto_fix_layout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if not text or text.startswith('!'):
         return
-    fixed = fix_keyboard(text)
-    if fixed != text:
-        await update.message.reply_text(f"🔁 Возможно, вы имели в виду: {fixed}")
+    # Проверяем, нужно ли исправлять (использует Groq для длинных текстов)
+    if await should_fix(text):
+        fixed = fix_keyboard(text)
+        if fixed != text:
+            await update.message.reply_text(f"🔁 Возможно, вы имели в виду: {fixed}")
 
 # ------------------------------------------------------------
 # Режим Черри (отвечает сама, с шансом, на имя и реплай)
@@ -340,15 +341,15 @@ async def cherry_mode_response(update: Update, context: ContextTypes.DEFAULT_TYP
     if re.search(r'(https?://\S+)', text):
         return
 
-    # Если режим не cherry – не отвечаем
-    if get_mode() != "cherry":
+    chat_id = str(update.effective_chat.id)
+    # Проверяем режим
+    if get_mode(chat_id) != "cherry":
         return
 
-    chat_id = str(update.effective_chat.id)
     user_id = str(update.effective_user.id)
     is_named = "черри" in text.lower()
     is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
-    chance = get_response_chance()
+    chance = get_response_chance(chat_id)
 
     if is_named or is_reply or random.random() < chance:
         await send_typing(update, context)
@@ -382,7 +383,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url), group=0)
     # Автоисправление раскладки
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_fix_layout), group=1)
-    # Режим Черри (только если режим cherry)
+    # Режим Черри
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cherry_mode_response), group=2)
 
     logger.info("Cherry Bot запущен")
