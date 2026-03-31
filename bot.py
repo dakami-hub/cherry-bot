@@ -45,6 +45,13 @@ def get_response_chance(chat_id: str) -> float:
 def set_response_chance(chat_id: str, chance: float):
     set_setting(chat_id, "response_chance", str(chance))
 
+def get_voice_chance(chat_id: str) -> float:
+    val = get_setting(chat_id, "voice_chance", "0.3")
+    return float(val)
+
+def set_voice_chance(chat_id: str, chance: float):
+    set_setting(chat_id, "voice_chance", str(chance))
+
 # ------------------------------------------------------------
 async def send_typing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(
@@ -64,7 +71,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Вести долги (!должен, !вернул, !долги)\n"
         "• Скачивать видео/аудио (ссылка или !звук ссылка)\n"
         "• Общаться как человек (в режиме cherry) или через !ии (в любом режиме)\n"
-        "• Озвучивать ответы (!озвучь)\n\n"
+        "• Озвучивать ответы (автоматически или !озвучь)\n\n"
         "Команды: /start, /clear, /help, !команды"
     )
 
@@ -97,7 +104,8 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
     # ---------- !команды ----------
     if cmd in ["команды", "help", "помощь"]:
         mode = get_mode(chat_id)
-        chance = int(get_response_chance(chat_id) * 100)
+        resp_chance = int(get_response_chance(chat_id) * 100)
+        voice_chance = int(get_voice_chance(chat_id) * 100)
         await update.message.reply_text(
             f"🍒 *Список команд:*\n"
             "`!тр [текст]` — исправить раскладку\n"
@@ -109,9 +117,11 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             "`!ии текст` — поговорить с обычным ИИ (в любом режиме)\n"
             "`!режим [cherry/normal]` — сменить режим (только админ)\n"
             "`!шанс [0-100]` — сменить шанс ответа (только админ)\n"
+            "`!голосшанс [0-100]` — сменить шанс голосового ответа (только админ)\n"
             "`!команды` — этот список\n\n"
             f"*Текущий режим:* {mode}\n"
-            f"*Шанс ответа:* {chance}%",
+            f"*Шанс ответа:* {resp_chance}%\n"
+            f"*Шанс голосового:* {voice_chance}%",
             parse_mode='Markdown'
         )
 
@@ -145,6 +155,24 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
                 raise ValueError
             set_response_chance(chat_id, val / 100.0)
             await update.message.reply_text(f"✅ Шанс ответа изменён на {val}% для этого чата")
+        except:
+            await update.message.reply_text("Укажи число от 0 до 100")
+
+    # ---------- !голосшанс (админ) ----------
+    elif cmd == "голосшанс":
+        if not is_admin(update.effective_user):
+            await update.message.reply_text("⛔ Только для администратора.")
+            return
+        if not args:
+            curr = int(get_voice_chance(chat_id) * 100)
+            await update.message.reply_text(f"Текущий шанс голосового ответа: {curr}%")
+            return
+        try:
+            val = float(args[0])
+            if val < 0 or val > 100:
+                raise ValueError
+            set_voice_chance(chat_id, val / 100.0)
+            await update.message.reply_text(f"✅ Шанс голосового ответа изменён на {val}% для этого чата")
         except:
             await update.message.reply_text("Укажи число от 0 до 100")
 
@@ -282,7 +310,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         text_to_say = last_ai_reply[user_id]
         await send_typing(update, context)
         try:
-            voice_file = f"voice_{user_id}.ogg"
+            voice_file = f"voice_{user_id}.mp3"  # gTTS сохраняет mp3
             await text_to_voice(text_to_say, voice_file)
             with open(voice_file, 'rb') as vf:
                 await update.message.reply_voice(voice=vf)
@@ -326,7 +354,6 @@ async def auto_fix_layout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if not text or text.startswith('!'):
         return
-    # Проверяем, нужно ли исправлять (использует Groq для длинных текстов)
     if await should_fix(text):
         fixed = fix_keyboard(text)
         if fixed != text:
@@ -342,7 +369,6 @@ async def cherry_mode_response(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     chat_id = str(update.effective_chat.id)
-    # Проверяем режим
     if get_mode(chat_id) != "cherry":
         return
 
@@ -355,9 +381,12 @@ async def cherry_mode_response(update: Update, context: ContextTypes.DEFAULT_TYP
         await send_typing(update, context)
         reply = await ai.get_cherry_response(chat_id, user_id, text)
         last_ai_reply[user_id] = reply
-        if random.random() < 0.3:
+
+        # Голосовой ответ с вероятностью voice_chance
+        voice_chance = get_voice_chance(chat_id)
+        if random.random() < voice_chance:
             try:
-                voice_file = f"voice_{user_id}.ogg"
+                voice_file = f"voice_{user_id}.mp3"
                 await text_to_voice(reply, voice_file)
                 with open(voice_file, 'rb') as vf:
                     await update.message.reply_voice(voice=vf)
@@ -376,14 +405,10 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("clear", clear_ai_history))
 
-    # Все команды с !
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^!'), handle_prefix_commands))
 
-    # Автоскачивание
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url), group=0)
-    # Автоисправление раскладки
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_fix_layout), group=1)
-    # Режим Черри
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cherry_mode_response), group=2)
 
     logger.info("Cherry Bot запущен")
