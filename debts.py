@@ -51,11 +51,11 @@ def get_debts_for_user(chat_id: str, user_id: str) -> str:
 
     lines = []
     if owe_me:
-        lines.append("📌 *Вам должны:*")
+        lines.append("📌 Вам должны:")
         for name, total in owe_me:
             lines.append(f"• {name}: {total:.2f} руб.")
     if i_owe:
-        lines.append("📌 *Вы должны:*")
+        lines.append("📌 Вы должны:")
         for name, total in i_owe:
             lines.append(f"• {name}: {total:.2f} руб.")
     return "\n".join(lines)
