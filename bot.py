@@ -4,6 +4,7 @@ import logging
 import random
 import sqlite3
 import requests
+import subprocess
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
@@ -13,7 +14,7 @@ from telegram.constants import ChatAction
 
 from db import (
     init_db, get_setting, set_setting, add_admin, remove_admin,
-    is_admin, is_superadmin, get_all_admins, save_user, get_user_by_username
+    is_admin, is_superadmin, get_all_admins, save_user, get_user_by_username, DB_PATH
 )
 from keyboard import fix_keyboard, should_fix
 from tts import text_to_voice
@@ -31,6 +32,9 @@ DOWNLOADER_SECRET = os.environ.get("DOWNLOADER_SECRET")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Режим технических работ (глобальный)
+maintenance_mode = False
 
 # Настройка суперадмина: можно задать ID в переменной окружения
 SUPERADMIN_ID = os.environ.get("SUPERADMIN_ID")          # например, "1545514094"
@@ -94,7 +98,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
 
 async def clear_ai_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from db import DB_PATH
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("DELETE FROM messages WHERE chat_id = ? AND user_id = ?",
@@ -111,8 +114,102 @@ async def save_user_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_user(str(user.id), user.username, user.full_name)
 
 # ------------------------------------------------------------
+# Проверка доступности сервисов для команды !тест
+async def run_self_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Запускает диагностику и отправляет результат суперадмину."""
+    results = []
+    # 1. Проверка базы данных
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("SELECT 1")
+        conn.close()
+        results.append("✅ База данных: OK")
+    except Exception as e:
+        results.append(f"❌ База данных: ошибка – {e}")
+
+    # 2. Проверка Telegram API (отправка тестового сообщения)
+    try:
+        await context.bot.send_message(chat_id=update.effective_user.id, text="Тест Telegram API: OK")
+        results.append("✅ Telegram API: OK")
+    except Exception as e:
+        results.append(f"❌ Telegram API: ошибка – {e}")
+
+    # 3. Проверка Groq API (короткий запрос)
+    try:
+        groq_key = os.environ.get("GROQ_API_KEY")
+        if not groq_key:
+            results.append("⚠️ Groq API ключ не задан")
+        else:
+            # Делаем тестовый запрос к Groq
+            import groq
+            client = groq.Groq(api_key=groq_key)
+            test_response = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": "Ответь: 2+2"}],
+                max_tokens=5
+            )
+            if test_response.choices:
+                results.append("✅ Groq API: OK")
+            else:
+                results.append("❌ Groq API: пустой ответ")
+    except Exception as e:
+        results.append(f"❌ Groq API: ошибка – {e}")
+
+    # 4. Проверка Tavily (если ключ есть)
+    tavily_key = os.environ.get("TAVILY_API_KEY")
+    if tavily_key:
+        try:
+            from tavily import TavilyClient
+            client = TavilyClient(api_key=tavily_key)
+            response = client.search(query="test", max_results=1)
+            if response.get('results'):
+                results.append("✅ Tavily API: OK")
+            else:
+                results.append("⚠️ Tavily API: работает, но результат пуст")
+        except Exception as e:
+            results.append(f"❌ Tavily API: ошибка – {e}")
+    else:
+        results.append("⚠️ Tavily API ключ не задан (не используется)")
+
+    # 5. Проверка ffmpeg и yt-dlp (наличие)
+    try:
+        # Проверяем ffmpeg
+        ffmpeg_path = shutil.which('ffmpeg')
+        if ffmpeg_path:
+            results.append(f"✅ ffmpeg найден: {ffmpeg_path}")
+        else:
+            results.append("❌ ffmpeg не найден")
+    except Exception as e:
+        results.append(f"❌ Ошибка при проверке ffmpeg: {e}")
+
+    try:
+        import yt_dlp
+        results.append(f"✅ yt-dlp версия: {yt_dlp.version.__version__}")
+    except Exception as e:
+        results.append(f"❌ yt-dlp: {e}")
+
+    # 6. Проверка скачивания TikTok (короткий тест – только наличие функций)
+    try:
+        # Просто вызываем функцию с заглушкой, чтобы проверить импорт
+        from download import download_tiktok_video, download_tiktok_audio
+        results.append("✅ Модуль download_tiktok импортирован")
+    except Exception as e:
+        results.append(f"❌ download_tiktok: {e}")
+
+    # 7. Проверка прав суперадмина
+    if is_superadmin(str(update.effective_user.id)):
+        results.append("✅ Вы суперадмин (ID подтверждён)")
+    else:
+        results.append("⚠️ Вы не суперадмин (эта проверка запущена вами, но в базе вас нет – возможно, нужно добавить)")
+
+    # Отправляем результат
+    await update.message.reply_text("🔍 *Результаты самодиагностики:*\n" + "\n".join(results), parse_mode='Markdown')
+
+# ------------------------------------------------------------
 # Обработчик команд с !
 async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global maintenance_mode
+
     text = update.message.text.strip()
     if not text.startswith('!'):
         return
@@ -134,7 +231,44 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             add_admin(user_id, user.username, "superadmin")
             logger.info(f"Added superadmin {user.username} ({user_id})")
 
-    # ---------- !команды ----------
+    # Если режим обслуживания активен, разрешаем только команды техработ и тест, и только в личке от суперадмина
+    if maintenance_mode:
+        if not (update.effective_chat.type == 'private' and is_superadmin(user_id)):
+            # В группе или от не-админа – игнорируем всё
+            return
+        # Разрешены команды для суперадмина в личке
+        if cmd not in ["техработы", "конецработ", "тест"]:
+            await update.message.reply_text("🔧 Бот в режиме технического обслуживания. Другие команды временно отключены.")
+            return
+
+    # ---------- !техработы (только суперадмин) ----------
+    if cmd == "техработы":
+        if not is_superadmin(user_id):
+            await update.message.reply_text("⛔ Только для суперадмина.")
+            return
+        maintenance_mode = True
+        await update.message.reply_text("🔧 Режим технического обслуживания включён. Бот не будет отвечать в группах и другим пользователям. Только вы можете управлять им. Для выхода используйте !конецработ.")
+        return
+
+    # ---------- !конецработ (только суперадмин) ----------
+    elif cmd == "конецработ":
+        if not is_superadmin(user_id):
+            await update.message.reply_text("⛔ Только для суперадмина.")
+            return
+        maintenance_mode = False
+        await update.message.reply_text("✅ Режим технического обслуживания отключён. Бот вернулся к обычной работе.")
+        return
+
+    # ---------- !тест (только суперадмин) ----------
+    elif cmd == "тест":
+        if not is_superadmin(user_id):
+            await update.message.reply_text("⛔ Только для суперадмина.")
+            return
+        await run_self_test(update, context)
+        return
+
+    # ---------- Остальные команды (выполняются только если режим обслуживания выключен) ----------
+    # !команды
     if cmd in ["команды", "help", "помощь"]:
         mode = get_mode(chat_id)
         resp_chance = int(get_response_chance(chat_id) * 100)
@@ -157,6 +291,9 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             "`!забратьправа @username` — удалить мини-админа (суперадмин)\n"
             "`!админы` — список админов (суперадмин)\n"
             "`!админкоманды` — подробная справка для админов\n"
+            "`!техработы` — включить режим обслуживания (суперадмин)\n"
+            "`!конецработ` — выключить режим обслуживания (суперадмин)\n"
+            "`!тест` — самодиагностика (суперадмин)\n"
             "`!команды` — этот список\n\n"
             f"*Текущий режим:* {mode}\n"
             f"*Шанс ответа:* {resp_chance}%\n"
@@ -337,7 +474,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
                 lines.append(f"⭐ {name} (суперадмин)")
             else:
                 lines.append(f"🔹 {name}")
-        await update.message.reply_text("\n".join(lines), parse_mode=None)  # убрали Markdown
+        await update.message.reply_text("\n".join(lines), parse_mode=None)
 
     # ---------- !админкоманды ----------
     elif cmd == "админкоманды":
@@ -488,7 +625,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
     # ---------- !долги ----------
     elif cmd == "долги":
         debts_str = debts_module.get_debts_for_user(chat_id, user_id)
-        await update.message.reply_text(debts_str, parse_mode=None)  # убрали Markdown
+        await update.message.reply_text(debts_str, parse_mode=None)
 
     # ---------- !звук ----------
     elif cmd == "звук":
@@ -538,11 +675,17 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
 # ------------------------------------------------------------
 # Автоскачивание видео
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global maintenance_mode
     text = update.message.text
     url_match = re.search(r'(https?://\S+)', text)
     if not url_match:
         return
     url = url_match.group(0)
+
+    # Если режим обслуживания – игнорируем (кроме лички суперадмина)
+    if maintenance_mode:
+        if update.effective_chat.type != 'private' or not is_superadmin(str(update.effective_user.id)):
+            return
 
     if re.search(r'(tiktok\.com|vm\.tiktok\.com)', url):
         if text.startswith('!звук'):
@@ -568,9 +711,13 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ------------------------------------------------------------
 # Автоисправление раскладки
 async def auto_fix_layout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global maintenance_mode
     text = update.message.text
     if not text or text.startswith('!'):
         return
+    if maintenance_mode:
+        if update.effective_chat.type != 'private' or not is_superadmin(str(update.effective_user.id)):
+            return
     if await should_fix(text):
         fixed = fix_keyboard(text)
         if fixed != text:
@@ -579,11 +726,16 @@ async def auto_fix_layout(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ------------------------------------------------------------
 # Режим Черри
 async def cherry_mode_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global maintenance_mode
     text = update.message.text
     if not text or text.startswith('!'):
         return
     if re.search(r'(https?://\S+)', text):
         return
+
+    if maintenance_mode:
+        if update.effective_chat.type != 'private' or not is_superadmin(str(update.effective_user.id)):
+            return
 
     chat_id = str(update.effective_chat.id)
     if get_mode(chat_id) != "cherry":
@@ -617,7 +769,7 @@ async def cherry_mode_response(update: Update, context: ContextTypes.DEFAULT_TYP
 def main():
     app = Application.builder().token(TOKEN).build()
 
-    # Сохраняем всех пользователей, кто пишет
+    # Сохраняем всех пользователей, кто пишет (даже в режиме обслуживания)
     app.add_handler(MessageHandler(filters.ALL, save_user_handler), group=-1)
 
     app.add_handler(CommandHandler("start", start))
