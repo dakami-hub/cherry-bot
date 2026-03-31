@@ -9,7 +9,6 @@ if not TAVILY_API_KEY:
 client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
 
 async def search_tavily(query: str, max_results: int = 10) -> str:
-    """Выполняет поиск через Tavily API и возвращает форматированные результаты."""
     if not client:
         return "Tavily API не настроен. Добавьте TAVILY_API_KEY в переменные окружения."
     try:
@@ -22,10 +21,8 @@ async def search_tavily(query: str, max_results: int = 10) -> str:
             exclude_domains=None
         )
         parts = []
-        # Короткий ответ (если есть)
         if response.get('answer'):
             parts.append(f"📌 *Краткий ответ:* {response['answer']}\n")
-        # Результаты поиска
         results = response.get('results', [])
         if results:
             parts.append("🔍 *Найдено в интернете:*")
