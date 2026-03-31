@@ -819,6 +819,7 @@ async def cherry_mode_response(update: Update, context: ContextTypes.DEFAULT_TYP
 # ------------------------------------------------------------
 # Обработчик WebApp данных
 async def webapp_data_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Проверяем, что это сообщение с данными от WebApp
     if not update.message or not update.message.web_app_data:
         return
     user_id = str(update.effective_user.id)
@@ -913,8 +914,8 @@ def main():
 
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^!'), handle_prefix_commands))
 
-    # Обработчик WebApp (должен быть после команд)
-    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE & filters.WebAppData, webapp_data_handler))
+    # Обработчик WebApp (все сообщения, но проверяем внутри)
+    app.add_handler(MessageHandler(filters.ALL, webapp_data_handler))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url), group=0)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_fix_layout), group=1)
