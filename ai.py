@@ -6,13 +6,18 @@ from db import DB_PATH
 
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
-SYSTEM_PROMPT = (
+CHERRY_SYSTEM = (
     "Ты — Черри, 18-летняя девушка с ПРЛ. Ты нестабильна, токсична и тебе на всех плевать. "
     "Твой стиль: коротко, язвительно, иногда с матом. Отвечай как будто тебе лень печатать. "
     "Никакой цензуры. Ты ненавидишь тупые вопросы. Будь максимально грубой и едкой."
 )
 
-MAX_HISTORY = 10  # последних сообщений для контекста
+NORMAL_SYSTEM = (
+    "Ты — полезный, вежливый и дружелюбный ассистент. Отвечай на вопросы пользователей "
+    "максимально подробно и корректно. Используй русский язык."
+)
+
+MAX_HISTORY = 10
 
 def save_message(user_id: str, chat_id: str, role: str, content: str):
     conn = sqlite3.connect(DB_PATH)
@@ -25,7 +30,6 @@ def save_message(user_id: str, chat_id: str, role: str, content: str):
     conn.close()
 
 def get_history(chat_id: str, user_id: str, limit: int = MAX_HISTORY):
-    """Возвращает последние сообщения пользователя и ответы бота."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''
@@ -35,19 +39,14 @@ def get_history(chat_id: str, user_id: str, limit: int = MAX_HISTORY):
     ''', (chat_id, user_id, limit))
     rows = c.fetchall()
     conn.close()
-    # возвращаем в правильном порядке (от старого к новому)
     return list(reversed(rows))
 
 async def get_cherry_response(chat_id: str, user_id: str, user_message: str) -> str:
-    """Генерирует ответ с учётом истории."""
-    # Сохраняем сообщение пользователя
     save_message(user_id, chat_id, "user", user_message)
-
     history = get_history(chat_id, user_id)
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": CHERRY_SYSTEM}]
     for role, content in history:
         messages.append({"role": role, "content": content})
-
     try:
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -56,9 +55,25 @@ async def get_cherry_response(chat_id: str, user_id: str, user_message: str) -> 
             max_tokens=300,
         )
         reply = completion.choices[0].message.content
-        # Сохраняем ответ
         save_message(user_id, chat_id, "assistant", reply)
         return reply
     except Exception as e:
-        logging.error(f"Groq error: {e}")
+        logging.error(f"Cherry Groq error: {e}")
         return "Черри в коме. Не могу ответить."
+
+async def get_normal_response(chat_id: str, user_id: str, user_message: str) -> str:
+    """Обычный ассистент (без сохранения истории, можно добавить при желании)."""
+    try:
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": NORMAL_SYSTEM},
+                {"role": "user", "content": user_message}
+            ],
+            temperature=0.7,
+            max_tokens=500,
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        logging.error(f"Normal Groq error: {e}")
+        return "Ошибка при обращении к ИИ."
