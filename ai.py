@@ -3,7 +3,7 @@ import sqlite3
 import logging
 from groq import Groq
 from db import DB_PATH
-from search import search_web
+from search import search_web, search_google
 
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
@@ -86,20 +86,40 @@ async def get_normal_response(chat_id: str, user_id: str, user_message: str) -> 
         return "Ошибка при обращении к ИИ."
 
 async def get_smart_response(query: str) -> str:
-    """Выполняет поиск в интернете и генерирует ответ на основе результатов."""
+    """Выполняет поиск в интернете (сначала DuckDuckGo, при необходимости Google) и генерирует ответ."""
     try:
-        # 1. Поиск в интернете
-        search_results = await search_web(query, max_results=5)
-        
-        # 2. Формируем промпт
+        # 1. Поиск в DuckDuckGo
+        search_results = await search_web(query, max_results=10)
+
+        # 2. Если DuckDuckGo не дал результатов, пробуем Google (если есть ключи)
+        if not search_results or search_results == "Ничего не найдено.":
+            google_key = os.environ.get("GOOGLE_API_KEY")
+            google_cx = os.environ.get("GOOGLE_CX")
+            if google_key and google_cx:
+                search_results = await search_google(query, max_results=5, api_key=google_key, cx=google_cx)
+            else:
+                search_results = "Ничего не найдено."
+
+        # 3. Если всё равно пусто
+        if not search_results or search_results == "Ничего не найдено.":
+            return (
+                "❌ Не удалось найти информацию по вашему запросу.\n"
+                "Попробуйте переформулировать вопрос или уточнить дату/место.\n"
+                "Например: `!smart погода в Екатеринбурге сегодня`"
+            )
+
+        # 4. Системный промпт
         system_prompt = (
             "Ты — умный ассистент с доступом к интернету. "
             "На основе предоставленных результатов поиска дай точный, структурированный и полезный ответ. "
-            "Если информации недостаточно, честно скажи об этом. Используй русский язык."
+            "Если в результатах есть информация о погоде, курсе валют, новостях и т.д. – используй её. "
+            "Если информации недостаточно, честно скажи об этом и предложи, как уточнить запрос. "
+            "Ответ должен быть на русском языке, кратким и по делу."
         )
-        user_prompt = f"Вопрос пользователя: {query}\n\nРезультаты поиска:\n{search_results}"
-        
-        # 3. Отправляем в Groq
+
+        user_prompt = f"Вопрос пользователя: {query}\n\nРезультаты поиска (актуальные данные):\n{search_results}"
+
+        # 5. Запрос к Groq
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
@@ -112,4 +132,4 @@ async def get_smart_response(query: str) -> str:
         return completion.choices[0].message.content
     except Exception as e:
         logging.error(f"Smart response error: {e}")
-        return f"Ошибка при получении ответа: {e}"
+        return f"❌ Ошибка при получении ответа: {e}"
