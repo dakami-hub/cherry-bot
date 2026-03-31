@@ -1,50 +1,42 @@
-import asyncio
-import requests
-from duckduckgo_search import DDGS
+import os
+import logging
+from tavily import TavilyClient
 
-async def search_web(query: str, max_results: int = 10) -> str:
-    """Выполняет поиск в DuckDuckGo и возвращает форматированные результаты."""
+TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
+if not TAVILY_API_KEY:
+    logging.warning("TAVILY_API_KEY not set, smart search will not work")
+
+client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
+
+async def search_tavily(query: str, max_results: int = 10) -> str:
+    """Выполняет поиск через Tavily API и возвращает форматированные результаты."""
+    if not client:
+        return "Tavily API не настроен. Добавьте TAVILY_API_KEY в переменные окружения."
     try:
-        with DDGS() as ddgs:
-            results = []
-            for r in ddgs.text(query, max_results=max_results):
-                results.append({
-                    'title': r['title'],
-                    'body': r['body'],
-                    'href': r['href']
-                })
-            if not results:
-                return "Ничего не найдено."
-            formatted = []
+        response = client.search(
+            query=query,
+            search_depth="basic",
+            max_results=max_results,
+            include_answer=True,
+            include_domains=None,
+            exclude_domains=None
+        )
+        parts = []
+        # Короткий ответ (если есть)
+        if response.get('answer'):
+            parts.append(f"📌 *Краткий ответ:* {response['answer']}\n")
+        # Результаты поиска
+        results = response.get('results', [])
+        if results:
+            parts.append("🔍 *Найдено в интернете:*")
             for i, res in enumerate(results, 1):
-                formatted.append(f"{i}. {res['title']}\n{res['body']}\n{res['href']}")
-            return "\n\n".join(formatted)
+                title = res.get('title', '')
+                content = res.get('content', '')
+                url = res.get('url', '')
+                parts.append(f"{i}. *{title}*\n{content}\n{url}")
+        if not parts:
+            return "Ничего не найдено."
+        return "\n\n".join(parts)
     except Exception as e:
-        return f"Ошибка поиска в DuckDuckGo: {e}"
-
-async def search_google(query: str, max_results: int = 5, api_key: str = None, cx: str = None) -> str:
-    """Выполняет поиск через Google Custom Search API (требует ключи)."""
-    if not api_key or not cx:
-        return "Ничего не найдено (Google Search не настроен)."
-    try:
-        url = "https://www.googleapis.com/customsearch/v1"
-        params = {
-            'key': api_key,
-            'cx': cx,
-            'q': query,
-            'num': max_results,
-            'hl': 'ru',
-        }
-        response = requests.get(url, params=params, timeout=10)
-        data = response.json()
-        if 'items' not in data:
-            return "Ничего не найдено через Google."
-        formatted = []
-        for i, item in enumerate(data['items'], 1):
-            title = item.get('title', '')
-            snippet = item.get('snippet', '')
-            link = item.get('link', '')
-            formatted.append(f"{i}. {title}\n{snippet}\n{link}")
-        return "\n\n".join(formatted)
-    except Exception as e:
-        return f"Ошибка поиска в Google: {e}"
+        logging.error(f"Tavily search error: {e}")
+        return f"Ошибка поиска: {e}"
