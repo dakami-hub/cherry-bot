@@ -3,6 +3,7 @@ import sqlite3
 import logging
 from groq import Groq
 from db import DB_PATH
+from search import search_web
 
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
@@ -83,3 +84,32 @@ async def get_normal_response(chat_id: str, user_id: str, user_message: str) -> 
     except Exception as e:
         logging.error(f"Normal Groq error: {e}")
         return "Ошибка при обращении к ИИ."
+
+async def get_smart_response(query: str) -> str:
+    """Выполняет поиск в интернете и генерирует ответ на основе результатов."""
+    try:
+        # 1. Поиск в интернете
+        search_results = await search_web(query, max_results=5)
+        
+        # 2. Формируем промпт
+        system_prompt = (
+            "Ты — умный ассистент с доступом к интернету. "
+            "На основе предоставленных результатов поиска дай точный, структурированный и полезный ответ. "
+            "Если информации недостаточно, честно скажи об этом. Используй русский язык."
+        )
+        user_prompt = f"Вопрос пользователя: {query}\n\nРезультаты поиска:\n{search_results}"
+        
+        # 3. Отправляем в Groq
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.7,
+            max_tokens=800,
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        logging.error(f"Smart response error: {e}")
+        return f"Ошибка при получении ответа: {e}"
