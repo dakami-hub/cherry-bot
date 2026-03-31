@@ -1,11 +1,27 @@
 import yt_dlp
 import os
 import logging
+import shutil
 
 COOKIES_FILE = "cookies.txt"
 
+def get_ffmpeg_path():
+    """Пытается найти ffmpeg в системе и возвращает путь или None."""
+    ffmpeg_path = shutil.which('ffmpeg')
+    if ffmpeg_path:
+        return ffmpeg_path
+    # Альтернативные пути (на случай, если which не сработал)
+    possible_paths = [
+        '/usr/bin/ffmpeg',
+        '/usr/local/bin/ffmpeg',
+        '/nix/store/*/bin/ffmpeg',  # в Railway nixpkgs
+    ]
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+    return None
+
 def download_video(url: str) -> str | None:
-    """Скачивает видео в mp4 (до 50МБ, 720p) и возвращает путь."""
     os.makedirs("downloads", exist_ok=True)
     opts = {
         'outtmpl': 'downloads/%(id)s.%(ext)s',
@@ -15,6 +31,9 @@ def download_video(url: str) -> str | None:
         'format': 'bestvideo[height<=720][ext=mp4][filesize<45M]+bestaudio[ext=m4a]/best[height<=720][ext=mp4][filesize<45M]/best',
         'merge_output_format': 'mp4',
     }
+    ffmpeg_path = get_ffmpeg_path()
+    if ffmpeg_path:
+        opts['ffmpeg_location'] = ffmpeg_path
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
@@ -24,7 +43,6 @@ def download_video(url: str) -> str | None:
         return None
 
 def download_audio(url: str) -> str | None:
-    """Скачивает аудио в mp3 и возвращает путь."""
     os.makedirs("downloads", exist_ok=True)
     opts = {
         'outtmpl': 'downloads/%(id)s.%(ext)s',
@@ -38,6 +56,9 @@ def download_audio(url: str) -> str | None:
             'preferredquality': '192',
         }],
     }
+    ffmpeg_path = get_ffmpeg_path()
+    if ffmpeg_path:
+        opts['ffmpeg_location'] = ffmpeg_path
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
