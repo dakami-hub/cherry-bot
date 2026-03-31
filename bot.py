@@ -4,7 +4,7 @@ import logging
 import random
 import sqlite3
 import requests
-import subprocess
+import shutil
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
@@ -127,20 +127,19 @@ async def run_self_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         results.append(f"❌ База данных: ошибка – {e}")
 
-    # 2. Проверка Telegram API (отправка тестового сообщения)
+    # 2. Проверка Telegram API
     try:
         await context.bot.send_message(chat_id=update.effective_user.id, text="Тест Telegram API: OK")
         results.append("✅ Telegram API: OK")
     except Exception as e:
         results.append(f"❌ Telegram API: ошибка – {e}")
 
-    # 3. Проверка Groq API (короткий запрос)
+    # 3. Проверка Groq API
     try:
         groq_key = os.environ.get("GROQ_API_KEY")
         if not groq_key:
             results.append("⚠️ Groq API ключ не задан")
         else:
-            # Делаем тестовый запрос к Groq
             import groq
             client = groq.Groq(api_key=groq_key)
             test_response = client.chat.completions.create(
@@ -173,7 +172,6 @@ async def run_self_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 5. Проверка ffmpeg и yt-dlp (наличие)
     try:
-        # Проверяем ffmpeg
         ffmpeg_path = shutil.which('ffmpeg')
         if ffmpeg_path:
             results.append(f"✅ ffmpeg найден: {ffmpeg_path}")
@@ -188,9 +186,8 @@ async def run_self_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         results.append(f"❌ yt-dlp: {e}")
 
-    # 6. Проверка скачивания TikTok (короткий тест – только наличие функций)
+    # 6. Проверка модуля скачивания TikTok
     try:
-        # Просто вызываем функцию с заглушкой, чтобы проверить импорт
         from download import download_tiktok_video, download_tiktok_audio
         results.append("✅ Модуль download_tiktok импортирован")
     except Exception as e:
@@ -234,14 +231,12 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
     # Если режим обслуживания активен, разрешаем только команды техработ и тест, и только в личке от суперадмина
     if maintenance_mode:
         if not (update.effective_chat.type == 'private' and is_superadmin(user_id)):
-            # В группе или от не-админа – игнорируем всё
             return
-        # Разрешены команды для суперадмина в личке
         if cmd not in ["техработы", "конецработ", "тест"]:
             await update.message.reply_text("🔧 Бот в режиме технического обслуживания. Другие команды временно отключены.")
             return
 
-    # ---------- !техработы (только суперадмин) ----------
+    # ---------- !техработы ----------
     if cmd == "техработы":
         if not is_superadmin(user_id):
             await update.message.reply_text("⛔ Только для суперадмина.")
@@ -250,7 +245,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("🔧 Режим технического обслуживания включён. Бот не будет отвечать в группах и другим пользователям. Только вы можете управлять им. Для выхода используйте !конецработ.")
         return
 
-    # ---------- !конецработ (только суперадмин) ----------
+    # ---------- !конецработ ----------
     elif cmd == "конецработ":
         if not is_superadmin(user_id):
             await update.message.reply_text("⛔ Только для суперадмина.")
@@ -259,7 +254,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("✅ Режим технического обслуживания отключён. Бот вернулся к обычной работе.")
         return
 
-    # ---------- !тест (только суперадмин) ----------
+    # ---------- !тест ----------
     elif cmd == "тест":
         if not is_superadmin(user_id):
             await update.message.reply_text("⛔ Только для суперадмина.")
@@ -276,8 +271,8 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(
             f"🍒 *Список команд:*\n"
             "`!тр [текст]` — исправить раскладку\n"
-            "`!должен @username сумма описание` — записать долг\n"
-            "`!вернул @username сумма` — отметить возврат\n"
+            "`!должен @username сумма описание` — записать долг (вы должны этому пользователю)\n"
+            "`!вернул @username сумма` — отметить возврат долга (вы возвращаете)\n"
             "`!долги` — показать ваши долги\n"
             "`!звук ссылка` — скачать аудио из TikTok\n"
             "`!озвучь` — озвучить последний ответ\n"
@@ -497,8 +492,8 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             "`!админкоманды` — этот список.\n\n"
             "💡 *Обычные команды (доступны всем):*\n"
             "`!тр [текст]` — исправить раскладку\n"
-            "`!должен @username сумма описание` — записать долг\n"
-            "`!вернул @username сумма` — отметить возврат\n"
+            "`!должен @username сумма описание` — записать долг (вы должны)\n"
+            "`!вернул @username сумма` — отметить возврат долга (вы возвращаете)\n"
             "`!долги` — показать ваши долги\n"
             "`!звук ссылка` — скачать аудио из TikTok\n"
             "`!озвучь` — озвучить последний ответ\n"
@@ -570,16 +565,16 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("Сумма должна быть числом.")
             return
         description = ' '.join(args[2:])
-        creditor_id = user_id
-        creditor_name = user.full_name
-        debtor_username = mention[1:]
-        debtor_id = debtor_username
-        debtor_name = debtor_username
+        debtor_id = user_id                       # я должник
+        debtor_name = user.full_name
+        creditor_username = mention[1:]
+        creditor_id = creditor_username
+        creditor_name = creditor_username
         try:
             member = await context.bot.get_chat_member(update.effective_chat.id, mention)
-            debtor_id = str(member.user.id)
-            debtor_name = member.user.full_name
-        except Exception as e:
+            creditor_id = str(member.user.id)
+            creditor_name = member.user.full_name
+        except:
             pass
         debts_module.add_debt(
             chat_id,
@@ -587,7 +582,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             debtor_id, debtor_name,
             amount, description
         )
-        await update.message.reply_text(f"✅ Записал: {debtor_name} должен {creditor_name} {amount} руб. ({description})")
+        await update.message.reply_text(f"✅ Записал: вы должны {creditor_name} {amount} руб. ({description})")
 
     # ---------- !вернул ----------
     elif cmd == "вернул":
@@ -604,12 +599,12 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("Сумма должна быть числом.")
             return
         creditor_username = mention[1:]
-        debtor_id = user_id
         creditor_id = creditor_username
+        debtor_id = user_id                         # я должник, возвращаю кредитору
         try:
             member = await context.bot.get_chat_member(update.effective_chat.id, mention)
             creditor_id = str(member.user.id)
-        except Exception as e:
+        except:
             pass
         success = debts_module.repay_debt(
             chat_id,
@@ -618,14 +613,14 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             amount
         )
         if success:
-            await update.message.reply_text(f"✅ Отметил возврат {amount} руб.")
+            await update.message.reply_text(f"✅ Отметил возврат {amount} руб. для {creditor_username}")
         else:
-            await update.message.reply_text("❌ Не найден непогашенный долг с такой суммой.")
+            await update.message.reply_text("❌ Не найден активный долг с такой суммой. Возможно, вы не должны этому пользователю или сумма больше долга.")
 
     # ---------- !долги ----------
     elif cmd == "долги":
         debts_str = debts_module.get_debts_for_user(chat_id, user_id)
-        await update.message.reply_text(debts_str, parse_mode=None)
+        await update.message.reply_text(debts_str, parse_mode='Markdown')
 
     # ---------- !звук ----------
     elif cmd == "звук":
@@ -682,7 +677,6 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     url = url_match.group(0)
 
-    # Если режим обслуживания – игнорируем (кроме лички суперадмина)
     if maintenance_mode:
         if update.effective_chat.type != 'private' or not is_superadmin(str(update.effective_user.id)):
             return
@@ -769,7 +763,7 @@ async def cherry_mode_response(update: Update, context: ContextTypes.DEFAULT_TYP
 def main():
     app = Application.builder().token(TOKEN).build()
 
-    # Сохраняем всех пользователей, кто пишет (даже в режиме обслуживания)
+    # Сохраняем всех пользователей, кто пишет
     app.add_handler(MessageHandler(filters.ALL, save_user_handler), group=-1)
 
     app.add_handler(CommandHandler("start", start))
