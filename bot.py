@@ -2,6 +2,7 @@ import os
 import re
 import logging
 import random
+import sqlite3
 import requests
 from dotenv import load_dotenv
 from telegram import Update
@@ -10,7 +11,10 @@ from telegram.ext import (
 )
 from telegram.constants import ChatAction
 
-from db import init_db, get_setting, set_setting, add_admin, remove_admin, is_admin, is_superadmin, get_all_admins
+from db import (
+    init_db, get_setting, set_setting, add_admin, remove_admin,
+    is_admin, is_superadmin, get_all_admins, save_user, get_user_by_username
+)
 from keyboard import fix_keyboard, should_fix
 from tts import text_to_voice
 import debts as debts_module
@@ -36,8 +40,7 @@ init_db()
 # ------------------------------------------------------------
 # Настройки
 def get_mode(chat_id: str) -> str:
-    # Изменено: по умолчанию normal
-    return get_setting(chat_id, "mode", "normal")
+    return get_setting(chat_id, "mode", "normal")  # изменено: по умолчанию normal
 
 def set_mode(chat_id: str, mode: str):
     set_setting(chat_id, "mode", mode)
@@ -89,7 +92,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
 
 async def clear_ai_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import sqlite3
     from db import DB_PATH
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -98,6 +100,13 @@ async def clear_ai_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
     await update.message.reply_text("🧠 История диалога очищена.")
+
+# ------------------------------------------------------------
+# Обработчик всех сообщений — сохраняем пользователей
+async def save_user_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user:
+        user = update.effective_user
+        save_user(str(user.id), user.username, user.full_name)
 
 # ------------------------------------------------------------
 # Обработчик команд с !
@@ -210,13 +219,25 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("Укажи пользователя через @username")
             return
         target_username = mention[1:]
-        try:
-            member = await context.bot.get_chat_member(update.effective_chat.id, mention)
-            target_id = member.user.id
-            target_name = member.user.full_name
-            await update.message.reply_text(f"ID пользователя {target_name} (@{target_username}): `{target_id}`", parse_mode='Markdown')
-        except Exception as e:
-            await update.message.reply_text("❌ Не удалось найти пользователя в этом чате. Убедитесь, что он участник, и бот имеет права администратора.")
+        # Ищем в БД
+        row = get_user_by_username(target_username)
+        if row:
+            target_id, target_name = row
+            await update.message.reply_text(f"ID пользователя {target_name}: `{target_id}`", parse_mode='Markdown')
+        else:
+            # Пытаемся получить через API
+            try:
+                member = await context.bot.get_chat_member(update.effective_chat.id, mention)
+                target_id = member.user.id
+                target_name = member.user.full_name
+                await update.message.reply_text(f"ID пользователя {target_name}: `{target_id}`", parse_mode='Markdown')
+            except Exception as e:
+                await update.message.reply_text(
+                    "❌ Не удалось найти пользователя. "
+                    "Убедитесь, что он участник чата и бот имеет права администратора.\n"
+                    "Если пользователь писал мне в личные сообщения, он уже должен быть в базе. "
+                    "Попробуйте повторить команду позже."
+                )
 
     # ---------- !датьправа ----------
     elif cmd == "датьправа":
@@ -224,33 +245,51 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("⛔ Только для суперадмина.")
             return
         if not args:
-            await update.message.reply_text("❗ Укажи пользователя: !датьправа @username (или ID, если известен)")
+            await update.message.reply_text("❗ Укажи пользователя: !датьправа @username (или ID)")
             return
         mention = args[0]
         target_id = None
         target_name = None
-        # Попробуем как username
         if mention.startswith('@'):
-            try:
-                member = await context.bot.get_chat_member(update.effective_chat.id, mention)
-                target_id = str(member.user.id)
-                target_name = member.user.full_name
-            except Exception as e:
-                await update.message.reply_text(
-                    "❌ Не удалось найти пользователя в этом чате.\n"
-                    "Убедитесь, что:\n"
-                    "1. Пользователь является участником этого чата.\n"
-                    "2. Бот имеет права администратора (для получения информации).\n"
-                    "3. Вы правильно указали username (без опечаток).\n\n"
-                    "Если проблема сохраняется, попросите пользователя написать боту в личные сообщения, "
-                    "затем используйте команду `!узнатьид @username`, чтобы получить его ID, и повторите команду с ID:\n"
-                    "`!датьправа <ID>`"
-                )
-                return
+            username = mention[1:]
+            # Сначала ищем в БД
+            row = get_user_by_username(username)
+            if row:
+                target_id, target_name = row
+            else:
+                # Пытаемся через API
+                try:
+                    # Проверяем права бота
+                    bot_member = await context.bot.get_chat_member(update.effective_chat.id, context.bot.id)
+                    if bot_member.status not in ['administrator', 'creator']:
+                        await update.message.reply_text(
+                            "❌ Бот не является администратором чата. "
+                            "Не могу получить информацию о пользователе.\n"
+                            f"Попросите @{username} написать мне в личные сообщения, "
+                            "чтобы я запомнил его, и повторите команду."
+                        )
+                        return
+                    member = await context.bot.get_chat_member(update.effective_chat.id, mention)
+                    target_id = str(member.user.id)
+                    target_name = member.user.full_name
+                except Exception as e:
+                    await update.message.reply_text(
+                        f"❌ Не удалось найти пользователя {mention} в этом чате.\n"
+                        "Убедитесь, что он участник и бот имеет права администратора.\n"
+                        "Альтернативно, попросите его написать мне в личные сообщения, "
+                        "затем повторите команду."
+                    )
+                    return
         else:
-            # предполагаем, что это ID
+            # Это ID
             target_id = mention
-            target_name = f"пользователь {target_id}"
+            # Попробуем получить имя из БД
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT full_name FROM known_users WHERE user_id = ?", (target_id,))
+            row = c.fetchone()
+            conn.close()
+            target_name = row[0] if row else f"пользователь {target_id}"
         add_admin(target_id, target_name, "admin")
         await update.message.reply_text(f"✅ Пользователь {target_name} добавлен в админы.")
 
@@ -265,12 +304,17 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         mention = args[0]
         target_id = None
         if mention.startswith('@'):
-            try:
-                member = await context.bot.get_chat_member(update.effective_chat.id, mention)
-                target_id = str(member.user.id)
-            except Exception as e:
-                await update.message.reply_text("Не удалось найти пользователя в этом чате. Укажите ID.")
-                return
+            # Попробуем найти по username в БД
+            row = get_user_by_username(mention[1:])
+            if row:
+                target_id = row[0]
+            else:
+                try:
+                    member = await context.bot.get_chat_member(update.effective_chat.id, mention)
+                    target_id = str(member.user.id)
+                except Exception as e:
+                    await update.message.reply_text("Не удалось найти пользователя. Укажите ID.")
+                    return
         else:
             target_id = mention
         if is_superadmin(target_id):
@@ -574,6 +618,9 @@ async def cherry_mode_response(update: Update, context: ContextTypes.DEFAULT_TYP
 # ------------------------------------------------------------
 def main():
     app = Application.builder().token(TOKEN).build()
+
+    # Сохраняем всех пользователей, кто пишет
+    app.add_handler(MessageHandler(filters.ALL, save_user_handler), group=-1)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
