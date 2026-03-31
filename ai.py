@@ -20,26 +20,33 @@ NORMAL_SYSTEM = (
 MAX_HISTORY = 10
 
 def save_message(user_id: str, chat_id: str, role: str, content: str):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''
-        INSERT INTO messages (user_id, chat_id, role, content)
-        VALUES (?, ?, ?, ?)
-    ''', (user_id, chat_id, role, content))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute('''
+            INSERT INTO messages (user_id, chat_id, role, content)
+            VALUES (?, ?, ?, ?)
+        ''', (user_id, chat_id, role, content))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Failed to save message: {e}")
 
 def get_history(chat_id: str, user_id: str, limit: int = MAX_HISTORY):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''
-        SELECT role, content FROM messages
-        WHERE chat_id = ? AND (user_id = ? OR role = 'assistant')
-        ORDER BY timestamp DESC LIMIT ?
-    ''', (chat_id, user_id, limit))
-    rows = c.fetchall()
-    conn.close()
-    return list(reversed(rows))
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute('''
+            SELECT role, content FROM messages
+            WHERE chat_id = ? AND (user_id = ? OR role = 'assistant')
+            ORDER BY timestamp DESC LIMIT ?
+        ''', (chat_id, user_id, limit))
+        rows = c.fetchall()
+        conn.close()
+        return list(reversed(rows))
+    except Exception as e:
+        logging.error(f"Failed to get history: {e}")
+        return []
 
 async def get_cherry_response(chat_id: str, user_id: str, user_message: str) -> str:
     save_message(user_id, chat_id, "user", user_message)
@@ -62,7 +69,6 @@ async def get_cherry_response(chat_id: str, user_id: str, user_message: str) -> 
         return "Черри в коме. Не могу ответить."
 
 async def get_normal_response(chat_id: str, user_id: str, user_message: str) -> str:
-    """Обычный ассистент (без сохранения истории, можно добавить при желании)."""
     try:
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
