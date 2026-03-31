@@ -69,7 +69,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Умею:\n"
         "• Исправлять раскладку (авто или !тр)\n"
         "• Вести долги (!должен, !вернул, !долги)\n"
-        "• Скачивать видео/аудио (ссылка или !звук ссылка)\n"
+        "• Скачивать видео/аудио (ссылка или !звук ссылка) с TikTok, VK, YouTube\n"
         "• Общаться как человек (в режиме cherry) или через !ии (в любом режиме)\n"
         "• Озвучивать ответы (автоматически или !озвучь)\n\n"
         "Команды: /start, /clear, /help, !команды"
@@ -112,7 +112,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             "`!должен @username сумма описание` — записать долг\n"
             "`!вернул @username сумма` — отметить возврат\n"
             "`!долги` — показать ваши долги\n"
-            "`!звук ссылка` — скачать аудио из видео\n"
+            "`!звук ссылка` — скачать аудио из видео (TikTok, VK, YouTube)\n"
             "`!озвучь` — озвучить последний ответ\n"
             "`!ии текст` — поговорить с обычным ИИ (в любом режиме)\n"
             "`!режим [cherry/normal]` — сменить режим (только админ)\n"
@@ -284,7 +284,8 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("❗ Напиши: !звук ссылка_на_видео")
             return
         url = args[0]
-        if not re.search(r'(tiktok\.com|vk\.com|youtu\.be|youtube\.com)', url):
+        # Поддержка TikTok, VK, YouTube (включая vk.ru)
+        if not re.search(r'(tiktok\.com|vm\.tiktok\.com|vk\.com/video|vk\.com/clip|vk\.ru|youtu\.be|youtube\.com)', url):
             await update.message.reply_text("Ссылка должна быть на TikTok, VK или YouTube.")
             return
         await send_typing(update, context)
@@ -310,7 +311,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         text_to_say = last_ai_reply[user_id]
         await send_typing(update, context)
         try:
-            voice_file = f"voice_{user_id}.mp3"  # gTTS сохраняет mp3
+            voice_file = f"voice_{user_id}.mp3"
             await text_to_voice(text_to_say, voice_file)
             with open(voice_file, 'rb') as vf:
                 await update.message.reply_voice(voice=vf)
@@ -330,7 +331,8 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not url_match:
         return
     url = url_match.group(0)
-    if not re.search(r'(tiktok\.com|vm\.tiktok\.com|vk\.com/video|youtu\.be|youtube\.com)', url):
+    # Поддержка TikTok, VK, YouTube (включая vk.ru)
+    if not re.search(r'(tiktok\.com|vm\.tiktok\.com|vk\.com/video|vk\.com/clip|vk\.ru|youtu\.be|youtube\.com)', url):
         return
     if text.startswith('!звук'):
         return
@@ -382,7 +384,6 @@ async def cherry_mode_response(update: Update, context: ContextTypes.DEFAULT_TYP
         reply = await ai.get_cherry_response(chat_id, user_id, text)
         last_ai_reply[user_id] = reply
 
-        # Голосовой ответ с вероятностью voice_chance
         voice_chance = get_voice_chance(chat_id)
         if random.random() < voice_chance:
             try:
