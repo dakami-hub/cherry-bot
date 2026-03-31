@@ -467,4 +467,126 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
                     logger.error(f"Send audio error: {e}")
                     await update.message.reply_text("Не удалось отправить аудио.")
             else:
-                
+                await update.message.reply_text("Не удалось скачать аудио.")
+        elif re.search(r'(vk\.com/video|vk\.com/clip|vk\.ru|youtu\.be|youtube\.com)', url):
+            await update.message.reply_text("🔧 Функция скачивания аудио для VK и YouTube в разработке. Пока что можно скачивать только TikTok.")
+        else:
+            await update.message.reply_text("Ссылка должна быть на TikTok (tiktok.com или vm.tiktok.com)")
+
+    # ---------- !озвучь ----------
+    elif cmd == "озвучь":
+        if user_id not in last_ai_reply:
+            await update.message.reply_text("Сначала получи ответ от ИИ (через !ии, !smart или в режиме cherry).")
+            return
+        text_to_say = last_ai_reply[user_id]
+        await send_typing(update, context)
+        try:
+            voice_file = f"voice_{user_id}.mp3"
+            await text_to_voice(text_to_say, voice_file)
+            with open(voice_file, 'rb') as vf:
+                await update.message.reply_voice(voice=vf)
+            os.remove(voice_file)
+        except Exception as e:
+            logger.error(f"Voice command error: {e}")
+            await update.message.reply_text("Не удалось создать голосовое сообщение.")
+
+    else:
+        pass
+
+# ------------------------------------------------------------
+# Автоскачивание видео
+async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    url_match = re.search(r'(https?://\S+)', text)
+    if not url_match:
+        return
+    url = url_match.group(0)
+
+    if re.search(r'(tiktok\.com|vm\.tiktok\.com)', url):
+        if text.startswith('!звук'):
+            return
+        await send_typing(update, context)
+        await update.message.reply_text("📥 Скачиваю видео из TikTok...")
+        filepath = download_tiktok_video(url)
+        if filepath and os.path.exists(filepath):
+            try:
+                with open(filepath, 'rb') as f:
+                    await update.message.reply_video(video=f, caption="Смотри, пока не удалили")
+                os.remove(filepath)
+            except Exception as e:
+                logger.error(f"Send video error: {e}")
+                await update.message.reply_text("Не удалось отправить видео.")
+        else:
+            await update.message.reply_text("Не удалось скачать видео. Проверь ссылку.")
+    elif re.search(r'(vk\.com/video|vk\.com/clip|vk\.ru|youtu\.be|youtube\.com)', url):
+        await update.message.reply_text("🔧 Функция скачивания для VK и YouTube в разработке. Пока что можно скачивать только TikTok.")
+    else:
+        return
+
+# ------------------------------------------------------------
+# Автоисправление раскладки
+async def auto_fix_layout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if not text or text.startswith('!'):
+        return
+    if await should_fix(text):
+        fixed = fix_keyboard(text)
+        if fixed != text:
+            await update.message.reply_text(f"🔁 Возможно, вы имели в виду: {fixed}")
+
+# ------------------------------------------------------------
+# Режим Черри
+async def cherry_mode_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if not text or text.startswith('!'):
+        return
+    if re.search(r'(https?://\S+)', text):
+        return
+
+    chat_id = str(update.effective_chat.id)
+    if get_mode(chat_id) != "cherry":
+        return
+
+    user_id = str(update.effective_user.id)
+    is_named = "черри" in text.lower()
+    is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
+    chance = get_response_chance(chat_id)
+
+    if is_named or is_reply or random.random() < chance:
+        await send_typing(update, context)
+        reply = await ai.get_cherry_response(chat_id, user_id, text)
+        last_ai_reply[user_id] = reply
+
+        voice_chance = get_voice_chance(chat_id)
+        if random.random() < voice_chance:
+            try:
+                voice_file = f"voice_{user_id}.mp3"
+                await text_to_voice(reply, voice_file)
+                with open(voice_file, 'rb') as vf:
+                    await update.message.reply_voice(voice=vf)
+                os.remove(voice_file)
+            except Exception as e:
+                logger.error(f"Voice error: {e}")
+                await update.message.reply_text(reply)
+        else:
+            await update.message.reply_text(reply)
+
+# ------------------------------------------------------------
+def main():
+    app = Application.builder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("clear", clear_ai_history))
+
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^!'), handle_prefix_commands))
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url), group=0)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_fix_layout), group=1)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cherry_mode_response), group=2)
+
+    logger.info("Cherry Bot запущен")
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
