@@ -5,6 +5,7 @@ import shutil
 import glob
 
 def get_ffmpeg_path():
+    """Ищет ffmpeg в системе."""
     ffmpeg_candidates = glob.glob('/nix/store/*ffmpeg*/bin/ffmpeg')
     if ffmpeg_candidates:
         logging.info(f"Found ffmpeg via glob: {ffmpeg_candidates[0]}")
@@ -38,6 +39,7 @@ def _get_common_opts():
     return opts
 
 def download_tiktok_video(url: str) -> str | None:
+    """Скачивает видео из TikTok."""
     os.makedirs("downloads", exist_ok=True)
     opts = _get_common_opts()
     opts.update({
@@ -54,6 +56,7 @@ def download_tiktok_video(url: str) -> str | None:
         return None
 
 def download_tiktok_audio(url: str) -> str | None:
+    """Скачивает аудио из TikTok (MP3)."""
     os.makedirs("downloads", exist_ok=True)
     opts = _get_common_opts()
     opts.update({
