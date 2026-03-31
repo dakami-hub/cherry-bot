@@ -32,7 +32,9 @@ DOWNLOADER_SECRET = os.environ.get("DOWNLOADER_SECRET")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-SUPERADMIN_USERNAME = "dakamiwannadielmaowhatabozo"  # замените при необходимости
+# Настройка суперадмина: можно задать ID в переменной окружения
+SUPERADMIN_ID = os.environ.get("SUPERADMIN_ID")          # например, "1545514094"
+SUPERADMIN_USERNAME = "dakamiwannadielmaowhatabozo"    # запасной вариант
 
 last_ai_reply = {}
 init_db()
@@ -40,7 +42,7 @@ init_db()
 # ------------------------------------------------------------
 # Настройки
 def get_mode(chat_id: str) -> str:
-    return get_setting(chat_id, "mode", "normal")  # изменено: по умолчанию normal
+    return get_setting(chat_id, "mode", "normal")
 
 def set_mode(chat_id: str, mode: str):
     set_setting(chat_id, "mode", mode)
@@ -123,7 +125,11 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
     user = update.effective_user
 
     # Автоматическое добавление суперадмина
-    if user.username and user.username.lower() == SUPERADMIN_USERNAME.lower():
+    if SUPERADMIN_ID and user_id == SUPERADMIN_ID:
+        if not is_superadmin(user_id):
+            add_admin(user_id, user.username or user.full_name or user_id, "superadmin")
+            logger.info(f"Added superadmin by ID {user_id}")
+    elif user.username and user.username.lower() == SUPERADMIN_USERNAME.lower():
         if not is_superadmin(user_id):
             add_admin(user_id, user.username, "superadmin")
             logger.info(f"Added superadmin {user.username} ({user_id})")
@@ -219,13 +225,11 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("Укажи пользователя через @username")
             return
         target_username = mention[1:]
-        # Ищем в БД
         row = get_user_by_username(target_username)
         if row:
             target_id, target_name = row
             await update.message.reply_text(f"ID пользователя {target_name}: `{target_id}`", parse_mode='Markdown')
         else:
-            # Пытаемся получить через API
             try:
                 member = await context.bot.get_chat_member(update.effective_chat.id, mention)
                 target_id = member.user.id
@@ -252,14 +256,11 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         target_name = None
         if mention.startswith('@'):
             username = mention[1:]
-            # Сначала ищем в БД
             row = get_user_by_username(username)
             if row:
                 target_id, target_name = row
             else:
-                # Пытаемся через API
                 try:
-                    # Проверяем права бота
                     bot_member = await context.bot.get_chat_member(update.effective_chat.id, context.bot.id)
                     if bot_member.status not in ['administrator', 'creator']:
                         await update.message.reply_text(
@@ -281,9 +282,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
                     )
                     return
         else:
-            # Это ID
             target_id = mention
-            # Попробуем получить имя из БД
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
             c.execute("SELECT full_name FROM known_users WHERE user_id = ?", (target_id,))
@@ -304,7 +303,6 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         mention = args[0]
         target_id = None
         if mention.startswith('@'):
-            # Попробуем найти по username в БД
             row = get_user_by_username(mention[1:])
             if row:
                 target_id = row[0]
@@ -332,14 +330,14 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         if not admins:
             await update.message.reply_text("Нет администраторов.")
             return
-        lines = ["👑 *Администраторы:*"]
+        lines = ["Администраторы:"]
         for uid, uname, role in admins:
             name = uname or uid
             if role == "superadmin":
                 lines.append(f"⭐ {name} (суперадмин)")
             else:
                 lines.append(f"🔹 {name}")
-        await update.message.reply_text("\n".join(lines), parse_mode='Markdown')
+        await update.message.reply_text("\n".join(lines), parse_mode=None)  # убрали Markdown
 
     # ---------- !админкоманды ----------
     elif cmd == "админкоманды":
@@ -358,7 +356,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             "`!узнатьид @username` — получить числовой ID пользователя (для выдачи прав, если бот не видит username).\n"
             "`!датьправа @username` — добавить пользователя в мини-админы (только суперадмин).\n"
             "`!забратьправа @username` — удалить пользователя из мини-админов.\n"
-            "`!админы` — показать список всех администраторов.\n"
+            "`!админы` — список всех администраторов.\n"
             "`!админкоманды` — этот список.\n\n"
             "💡 *Обычные команды (доступны всем):*\n"
             "`!тр [текст]` — исправить раскладку\n"
@@ -490,7 +488,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
     # ---------- !долги ----------
     elif cmd == "долги":
         debts_str = debts_module.get_debts_for_user(chat_id, user_id)
-        await update.message.reply_text(debts_str, parse_mode='Markdown')
+        await update.message.reply_text(debts_str, parse_mode=None)  # убрали Markdown
 
     # ---------- !звук ----------
     elif cmd == "звук":
