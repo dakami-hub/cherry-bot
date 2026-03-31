@@ -2,23 +2,32 @@ import yt_dlp
 import os
 import logging
 import shutil
+import glob
 
 COOKIES_FILE = "cookies.txt"
 
 def get_ffmpeg_path():
-    """Пытается найти ffmpeg в системе и возвращает путь или None."""
+    # 1. Поиск в nix store
+    ffmpeg_candidates = glob.glob('/nix/store/*ffmpeg*/bin/ffmpeg')
+    if ffmpeg_candidates:
+        logging.info(f"Found ffmpeg via glob: {ffmpeg_candidates[0]}")
+        return ffmpeg_candidates[0]
+    # 2. shutil.which
     ffmpeg_path = shutil.which('ffmpeg')
     if ffmpeg_path:
+        logging.info(f"Found ffmpeg via which: {ffmpeg_path}")
         return ffmpeg_path
-    # Альтернативные пути (на случай, если which не сработал)
+    # 3. Фиксированные пути
     possible_paths = [
         '/usr/bin/ffmpeg',
         '/usr/local/bin/ffmpeg',
-        '/nix/store/*/bin/ffmpeg',  # в Railway nixpkgs
+        '/nix/var/nix/profiles/default/bin/ffmpeg',
     ]
     for path in possible_paths:
         if os.path.exists(path):
+            logging.info(f"Found ffmpeg at {path}")
             return path
+    logging.error("ffmpeg not found!")
     return None
 
 def download_video(url: str) -> str | None:
@@ -59,6 +68,9 @@ def download_audio(url: str) -> str | None:
     ffmpeg_path = get_ffmpeg_path()
     if ffmpeg_path:
         opts['ffmpeg_location'] = ffmpeg_path
+    else:
+        logging.error("Cannot extract audio: ffmpeg missing")
+        return None
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
