@@ -2,6 +2,7 @@ import os
 import re
 import logging
 import random
+import requests
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
@@ -11,7 +12,6 @@ from telegram.constants import ChatAction
 
 from db import init_db, get_setting, set_setting
 from keyboard import fix_keyboard, should_fix
-from download import download_video, download_audio
 from tts import text_to_voice
 import debts as debts_module
 import ai
@@ -21,17 +21,19 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 if not TOKEN:
     raise ValueError("No TELEGRAM_TOKEN in .env")
 
+DOWNLOADER_URL = os.environ.get("DOWNLOADER_URL")
+DOWNLOADER_SECRET = os.environ.get("DOWNLOADER_SECRET")
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Администратор (замени на свой username без @)
-ADMIN_USERNAME = "dakamiwannadielmaowhatabozo"
+ADMIN_USERNAME = "dakamiwannadielmaowhatabozo"  # замените при необходимости
 
 last_ai_reply = {}
 init_db()
 
 # ------------------------------------------------------------
-# Функции для работы с настройками (привязаны к чату)
+# Настройки
 def get_mode(chat_id: str) -> str:
     return get_setting(chat_id, "mode", "cherry")
 
@@ -53,6 +55,7 @@ def set_voice_chance(chat_id: str, chance: float):
     set_setting(chat_id, "voice_chance", str(chance))
 
 # ------------------------------------------------------------
+# Вспомогательные функции
 async def send_typing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id, action=ChatAction.TYPING
@@ -60,6 +63,60 @@ async def send_typing(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def is_admin(user) -> bool:
     return user.username and user.username.lower() == ADMIN_USERNAME.lower()
+
+# ------------------------------------------------------------
+# Скачивание через внешний сервис
+def download_video(url: str) -> str | None:
+    if not DOWNLOADER_URL or not DOWNLOADER_SECRET:
+        logger.error("Downloader service not configured")
+        return None
+    try:
+        response = requests.get(
+            f"{DOWNLOADER_URL}/download",
+            params={"url": url, "audio": "false"},
+            headers={"Authorization": f"Bearer {DOWNLOADER_SECRET}"},
+            stream=True,
+            timeout=120
+        )
+        if response.status_code == 200:
+            os.makedirs("downloads", exist_ok=True)
+            filename = f"downloads/video_{abs(hash(url))}.mp4"
+            with open(filename, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            return filename
+        else:
+            logger.error(f"Downloader error: {response.status_code} {response.text}")
+            return None
+    except Exception as e:
+        logger.error(f"Downloader request failed: {e}")
+        return None
+
+def download_audio(url: str) -> str | None:
+    if not DOWNLOADER_URL or not DOWNLOADER_SECRET:
+        logger.error("Downloader service not configured")
+        return None
+    try:
+        response = requests.get(
+            f"{DOWNLOADER_URL}/download",
+            params={"url": url, "audio": "true"},
+            headers={"Authorization": f"Bearer {DOWNLOADER_SECRET}"},
+            stream=True,
+            timeout=120
+        )
+        if response.status_code == 200:
+            os.makedirs("downloads", exist_ok=True)
+            filename = f"downloads/audio_{abs(hash(url))}.mp3"
+            with open(filename, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            return filename
+        else:
+            logger.error(f"Downloader error: {response.status_code} {response.text}")
+            return None
+    except Exception as e:
+        logger.error(f"Downloader request failed: {e}")
+        return None
 
 # ------------------------------------------------------------
 # Команды /start, /help, /clear
@@ -284,7 +341,6 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("❗ Напиши: !звук ссылка_на_видео")
             return
         url = args[0]
-        # Поддержка TikTok, VK, YouTube (включая vk.ru)
         if not re.search(r'(tiktok\.com|vm\.tiktok\.com|vk\.com/video|vk\.com/clip|vk\.ru|youtu\.be|youtube\.com)', url):
             await update.message.reply_text("Ссылка должна быть на TikTok, VK или YouTube.")
             return
@@ -321,7 +377,7 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("Не удалось создать голосовое сообщение.")
 
     else:
-        pass  # неизвестная команда
+        pass
 
 # ------------------------------------------------------------
 # Автоскачивание видео
@@ -331,7 +387,6 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not url_match:
         return
     url = url_match.group(0)
-    # Поддержка TikTok, VK, YouTube (включая vk.ru)
     if not re.search(r'(tiktok\.com|vm\.tiktok\.com|vk\.com/video|vk\.com/clip|vk\.ru|youtu\.be|youtube\.com)', url):
         return
     if text.startswith('!звук'):
@@ -362,7 +417,7 @@ async def auto_fix_layout(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"🔁 Возможно, вы имели в виду: {fixed}")
 
 # ------------------------------------------------------------
-# Режим Черри (отвечает сама, с шансом, на имя и реплай)
+# Режим Черри
 async def cherry_mode_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if not text or text.startswith('!'):
