@@ -6,7 +6,6 @@ import glob
 
 def get_ffmpeg_path():
     """Ищет ffmpeg в системе."""
-    # Поиск в nix store (для Railway Nixpack)
     ffmpeg_candidates = glob.glob('/nix/store/*ffmpeg*/bin/ffmpeg')
     if ffmpeg_candidates:
         logging.info(f"Found ffmpeg via glob: {ffmpeg_candidates[0]}")
