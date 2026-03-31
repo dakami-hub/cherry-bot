@@ -3,7 +3,6 @@ import logging
 from gtts import gTTS
 
 async def text_to_voice(text: str, filename: str) -> None:
-    """Сохраняет голос в файл через Google TTS."""
     try:
         tts = gTTS(text=text, lang='ru')
         tts.save(filename)
