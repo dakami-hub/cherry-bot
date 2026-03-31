@@ -22,13 +22,13 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 if not TOKEN:
     raise ValueError("No TELEGRAM_TOKEN in .env")
 
-DOWNLOADER_URL = os.environ.get("DOWNLOADER_URL")          # не используется
+DOWNLOADER_URL = os.environ.get("DOWNLOADER_URL")
 DOWNLOADER_SECRET = os.environ.get("DOWNLOADER_SECRET")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-SUPERADMIN_USERNAME = "dakamiwannadielmaowhatabozo"  # замените при необходимости
+SUPERADMIN_USERNAME = "dakamiwannadielmaowhatabozo"
 
 last_ai_reply = {}
 init_db()
@@ -476,4 +476,5 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 with open(filepath, 'rb') as f:
                     await update.message.reply_video(video=f, caption="Смотри, пока не удалили")
-              
+                os.remove(filepath)
+            except Exception as e:
