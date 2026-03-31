@@ -207,6 +207,9 @@ async def run_self_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global maintenance_mode
 
+    if not update.message or not update.message.text:
+        return
+
     text = update.message.text.strip()
     if not text.startswith('!'):
         return
@@ -476,4 +479,318 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         if not has_admin_rights(user_id):
             await update.message.reply_text("⛔ Только для администраторов.")
             return
-        admin_
+        admin_help_text = (
+            "👑 *Подробные команды для администраторов:*\n\n"
+            "`!режим [cherry|normal]` — переключить режим бота в текущем чате.\n"
+            "   • `cherry` – токсичная девушка с ПРЛ, отвечает сама с шансом.\n"
+            "   • `normal` – обычный ассистент, не отвечает сам, только по вызову.\n\n"
+            "`!шанс [0-100]` — установить вероятность, с которой бот ответит сам (в режиме cherry).\n"
+            "   • По умолчанию 40%. Влияет на случайные ответы.\n\n"
+            "`!голосшанс [0-100]` — установить вероятность отправки голосового ответа.\n"
+            "   • По умолчанию 30%. Применяется к ответам Черри и !ии.\n\n"
+            "`!узнатьид @username` — получить числовой ID пользователя (для выдачи прав, если бот не видит username).\n"
+            "`!датьправа @username` — добавить пользователя в мини-админы (только суперадмин).\n"
+            "`!забратьправа @username` — удалить пользователя из мини-админов.\n"
+            "`!админы` — список всех администраторов.\n"
+            "`!админкоманды` — этот список.\n\n"
+            "💡 *Обычные команды (доступны всем):*\n"
+            "`!тр [текст]` — исправить раскладку\n"
+            "`!должен @username сумма описание` — записать долг (вы должны)\n"
+            "`!вернул @username сумма` — отметить возврат долга (вы возвращаете)\n"
+            "`!долги` — показать ваши долги\n"
+            "`!звук ссылка` — скачать аудио из TikTok\n"
+            "`!озвучь` — озвучить последний ответ\n"
+            "`!ии текст` — обычный ИИ (без контекста)\n"
+            "`!smart текст` — ИИ с поиском в интернете\n"
+            "`!команды` — краткая справка\n\n"
+            "⚠️ *Важно:* все настройки сохраняются отдельно для каждого чата."
+        )
+        await update.message.reply_text(admin_help_text, parse_mode='Markdown')
+
+    # ---------- !ии ----------
+    elif cmd == "ии":
+        query = None
+        if args:
+            query = ' '.join(args)
+        elif update.message.reply_to_message and update.message.reply_to_message.text:
+            query = update.message.reply_to_message.text
+        if not query:
+            await update.message.reply_text("Напиши: !ии текст (или ответь на сообщение)")
+            return
+        await send_typing(update, context)
+        reply = await ai.get_normal_response(chat_id, user_id, query)
+        last_ai_reply[user_id] = reply
+        await update.message.reply_text(reply)
+
+    # ---------- !smart ----------
+    elif cmd == "smart":
+        query = None
+        if args:
+            query = ' '.join(args)
+        elif update.message.reply_to_message and update.message.reply_to_message.text:
+            query = update.message.reply_to_message.text
+        if not query:
+            await update.message.reply_text("Напиши: !smart вопрос (или ответь на сообщение)")
+            return
+        await send_typing(update, context)
+        await update.message.reply_text("🔍 Ищу в интернете...")
+        try:
+            answer = await ai.get_smart_response(query)
+            last_ai_reply[user_id] = answer
+            await update.message.reply_text(answer)
+        except Exception as e:
+            logger.error(f"Smart command error: {e}")
+            await update.message.reply_text("❌ Не удалось получить ответ. Попробуй позже.")
+
+    # ---------- !тр ----------
+    elif cmd == "тр":
+        if args:
+            fixed = fix_keyboard(' '.join(args))
+            await update.message.reply_text(f"🔁 Исправлено: {fixed}")
+        elif update.message.reply_to_message and update.message.reply_to_message.text:
+            fixed = fix_keyboard(update.message.reply_to_message.text)
+            await update.message.reply_text(f"🔁 Исправлено: {fixed}")
+        else:
+            await update.message.reply_text("Напиши: !тр текст (или ответь на сообщение)")
+
+    # ---------- !должен ----------
+    elif cmd == "должен":
+        if len(args) < 3:
+            await update.message.reply_text("❗ Формат: !должен @username сумма описание")
+            return
+        mention = args[0]
+        if not mention.startswith('@'):
+            await update.message.reply_text("Укажи пользователя через @username")
+            return
+        try:
+            amount = float(args[1])
+        except:
+            await update.message.reply_text("Сумма должна быть числом.")
+            return
+        description = ' '.join(args[2:])
+        debtor_name = user.full_name or user.username or str(user.id)
+        creditor_username = mention[1:]
+        creditor_name = creditor_username
+        try:
+            member = await context.bot.get_chat_member(update.effective_chat.id, mention)
+            creditor_name = member.user.full_name or member.user.username
+        except:
+            pass
+        debts_module.add_debt(
+            chat_id,
+            creditor_name,
+            debtor_name,
+            amount,
+            description
+        )
+        await update.message.reply_text(f"✅ Записал: вы должны {creditor_name} {amount} руб. ({description})")
+
+    # ---------- !вернул ----------
+    elif cmd == "вернул":
+        if len(args) < 2:
+            await update.message.reply_text("❗ Формат: !вернул @username сумма")
+            return
+        mention = args[0]
+        if not mention.startswith('@'):
+            await update.message.reply_text("Укажи пользователя через @username")
+            return
+        try:
+            amount = float(args[1])
+        except:
+            await update.message.reply_text("Сумма должна быть числом.")
+            return
+        creditor_username = mention[1:]
+        creditor_name = creditor_username
+        try:
+            member = await context.bot.get_chat_member(update.effective_chat.id, mention)
+            creditor_name = member.user.full_name or member.user.username
+        except:
+            pass
+        debtor_name = user.full_name or user.username or str(user.id)
+        success = debts_module.repay_debt(
+            chat_id,
+            creditor_name,
+            debtor_name,
+            amount
+        )
+        if success:
+            await update.message.reply_text(f"✅ Отметил возврат {amount} руб. для {creditor_username}")
+        else:
+            await update.message.reply_text("❌ Не найден активный долг с такой суммой. Возможно, вы не должны этому пользователю или сумма больше долга.")
+
+    # ---------- !долги ----------
+    elif cmd == "долги":
+        user_name = user.full_name or user.username or str(user.id)
+        debts_str = debts_module.get_debts_for_user(chat_id, user_name)
+        await update.message.reply_text(debts_str, parse_mode='Markdown')
+
+    # ---------- !звук ----------
+    elif cmd == "звук":
+        if not args:
+            await update.message.reply_text("❗ Напиши: !звук ссылка_на_видео")
+            return
+        url = args[0]
+        if re.search(r'(tiktok\.com|vm\.tiktok\.com)', url):
+            await send_typing(update, context)
+            await update.message.reply_text("🎵 Скачиваю аудио из TikTok...")
+            filepath = download_tiktok_audio(url)
+            if filepath and os.path.exists(filepath):
+                try:
+                    with open(filepath, 'rb') as f:
+                        await update.message.reply_audio(audio=f, title="audio.mp3")
+                    os.remove(filepath)
+                except Exception as e:
+                    logger.error(f"Send audio error: {e}")
+                    await update.message.reply_text("Не удалось отправить аудио.")
+            else:
+                await update.message.reply_text("Не удалось скачать аудио.")
+        elif re.search(r'(vk\.com/video|vk\.com/clip|vk\.ru|youtu\.be|youtube\.com)', url):
+            await update.message.reply_text("🔧 Функция скачивания аудио для VK и YouTube в разработке. Пока что можно скачивать только TikTok.")
+        else:
+            await update.message.reply_text("Ссылка должна быть на TikTok (tiktok.com или vm.tiktok.com)")
+
+    # ---------- !озвучь ----------
+    elif cmd == "озвучь":
+        if user_id not in last_ai_reply:
+            await update.message.reply_text("Сначала получи ответ от ИИ (через !ии, !smart или в режиме cherry).")
+            return
+        text_to_say = last_ai_reply[user_id]
+        await send_typing(update, context)
+        try:
+            voice_file = f"voice_{user_id}.mp3"
+            await text_to_voice(text_to_say, voice_file)
+            with open(voice_file, 'rb') as vf:
+                await update.message.reply_voice(voice=vf)
+            os.remove(voice_file)
+        except Exception as e:
+            logger.error(f"Voice command error: {e}")
+            await update.message.reply_text("Не удалось создать голосовое сообщение.")
+
+    else:
+        pass
+
+# ------------------------------------------------------------
+# Автоскачивание видео
+async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global maintenance_mode
+
+    if not update.message or not update.message.text:
+        return
+
+    text = update.message.text
+    url_match = re.search(r'(https?://\S+)', text)
+    if not url_match:
+        return
+    url = url_match.group(0)
+
+    if maintenance_mode:
+        if update.effective_chat.type != 'private' or not is_superadmin(str(update.effective_user.id)):
+            return
+
+    if re.search(r'(tiktok\.com|vm\.tiktok\.com)', url):
+        if text.startswith('!звук'):
+            return
+        await send_typing(update, context)
+        await update.message.reply_text("📥 Скачиваю видео из TikTok...")
+        filepath = download_tiktok_video(url)
+        if filepath and os.path.exists(filepath):
+            try:
+                with open(filepath, 'rb') as f:
+                    await update.message.reply_video(video=f, caption="Смотри, пока не удалили")
+                os.remove(filepath)
+            except Exception as e:
+                logger.error(f"Send video error: {e}")
+                await update.message.reply_text("Не удалось отправить видео.")
+        else:
+            await update.message.reply_text("Не удалось скачать видео. Проверь ссылку.")
+    elif re.search(r'(vk\.com/video|vk\.com/clip|vk\.ru|youtu\.be|youtube\.com)', url):
+        await update.message.reply_text("🔧 Функция скачивания для VK и YouTube в разработке. Пока что можно скачивать только TikTok.")
+    else:
+        return
+
+# ------------------------------------------------------------
+# Автоисправление раскладки
+async def auto_fix_layout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global maintenance_mode
+
+    if not update.message or not update.message.text:
+        return
+
+    text = update.message.text
+    if not text or text.startswith('!'):
+        return
+    if maintenance_mode:
+        if update.effective_chat.type != 'private' or not is_superadmin(str(update.effective_user.id)):
+            return
+    if await should_fix(text):
+        fixed = fix_keyboard(text)
+        if fixed != text:
+            await update.message.reply_text(f"🔁 Возможно, вы имели в виду: {fixed}")
+
+# ------------------------------------------------------------
+# Режим Черри
+async def cherry_mode_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global maintenance_mode
+
+    if not update.message or not update.message.text:
+        return
+
+    text = update.message.text
+    if not text or text.startswith('!'):
+        return
+    if re.search(r'(https?://\S+)', text):
+        return
+
+    if maintenance_mode:
+        if update.effective_chat.type != 'private' or not is_superadmin(str(update.effective_user.id)):
+            return
+
+    chat_id = str(update.effective_chat.id)
+    if get_mode(chat_id) != "cherry":
+        return
+
+    user_id = str(update.effective_user.id)
+    is_named = "черри" in text.lower()
+    is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
+    chance = get_response_chance(chat_id)
+
+    if is_named or is_reply or random.random() < chance:
+        await send_typing(update, context)
+        reply = await ai.get_cherry_response(chat_id, user_id, text)
+        last_ai_reply[user_id] = reply
+
+        voice_chance = get_voice_chance(chat_id)
+        if random.random() < voice_chance:
+            try:
+                voice_file = f"voice_{user_id}.mp3"
+                await text_to_voice(reply, voice_file)
+                with open(voice_file, 'rb') as vf:
+                    await update.message.reply_voice(voice=vf)
+                os.remove(voice_file)
+            except Exception as e:
+                logger.error(f"Voice error: {e}")
+                await update.message.reply_text(reply)
+        else:
+            await update.message.reply_text(reply)
+
+# ------------------------------------------------------------
+def main():
+    app = Application.builder().token(TOKEN).build()
+
+    app.add_handler(MessageHandler(filters.ALL, save_user_handler), group=-1)
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("clear", clear_ai_history))
+
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^!'), handle_prefix_commands))
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url), group=0)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_fix_layout), group=1)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cherry_mode_response), group=2)
+
+    logger.info("Cherry Bot запущен")
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
