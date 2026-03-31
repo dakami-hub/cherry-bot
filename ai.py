@@ -86,23 +86,14 @@ async def get_normal_response(chat_id: str, user_id: str, user_message: str) -> 
         return "Ошибка при обращении к ИИ."
 
 async def get_smart_response(query: str) -> str:
-    """Выполняет поиск через Tavily и генерирует ответ."""
     try:
-        # 1. Поиск через Tavily
         search_results = await search_tavily(query, max_results=10)
-
-        # 2. Проверка на пустой результат
-        if not search_results or search_results in [
-            "Ничего не найдено.",
-            "Tavily API не настроен. Добавьте TAVILY_API_KEY в переменные окружения."
-        ]:
+        if not search_results or search_results == "Ничего не найдено.":
             return (
                 "❌ Не удалось найти информацию по вашему запросу.\n"
                 "Попробуйте переформулировать вопрос или уточнить дату/место.\n"
                 "Например: `!smart погода в Екатеринбурге сегодня`"
             )
-
-        # 3. Системный промпт
         system_prompt = (
             "Ты — умный ассистент с доступом к интернету. "
             "На основе предоставленных результатов поиска дай точный, структурированный и полезный ответ. "
@@ -110,10 +101,7 @@ async def get_smart_response(query: str) -> str:
             "Если информации недостаточно, честно скажи об этом и предложи, как уточнить запрос. "
             "Ответ должен быть на русском языке, кратким и по делу."
         )
-
         user_prompt = f"Вопрос пользователя: {query}\n\nРезультаты поиска (актуальные данные):\n{search_results}"
-
-        # 4. Запрос к Groq
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
