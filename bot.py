@@ -159,6 +159,7 @@ async def save_user_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ------------------------------------------------------------
 # Обработчик ввода имени
 async def name_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info("name_input_handler called")
     user_id = str(update.effective_user.id)
     if user_id in awaiting_name:
         name = update.message.text.strip()
@@ -179,6 +180,9 @@ async def name_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             except Exception as e:
                 logger.error(f"Name save error: {e}")
                 await update.message.reply_text("❌ Не удалось подключиться к серверу.")
+    else:
+        # Если не ожидаем ввода имени, ничего не делаем
+        pass
 
 # ------------------------------------------------------------
 # Проверка доступности сервисов для команды !тест
@@ -272,6 +276,7 @@ async def run_self_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ------------------------------------------------------------
 # Обработчик команд с !
 async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info("handle_prefix_commands called")
     global maintenance_mode
 
     if not update.message or not update.message.text:
@@ -875,21 +880,23 @@ def main():
     app = Application.builder().token(TOKEN).build()
 
     # Сохраняем всех пользователей, кто пишет
-    app.add_handler(MessageHandler(filters.ALL, save_user_handler), group=-1)
+    app.add_handler(MessageHandler(filters.ALL, save_user_handler))
 
-    # Обработчик ввода имени (до всех остальных)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, name_input_handler), group=0)
+    # Обработчик ввода имени (до всех остальных текстовых)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, name_input_handler))
 
+    # Команды
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("clear", clear_ai_history))
 
+    # Все команды с !
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^!'), handle_prefix_commands))
 
-    # Обработка ссылок – должна быть до всех остальных текстовых
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url), group=1)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_fix_layout), group=2)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cherry_mode_response), group=3)
+    # Обработка ссылок, автоисправление, режим Черри
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_fix_layout))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cherry_mode_response))
 
     logger.info("Cherry Bot запущен")
     app.run_polling(drop_pending_updates=True)
