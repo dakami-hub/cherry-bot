@@ -149,6 +149,7 @@ async def clear_ai_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ------------------------------------------------------------
 # Обработчик всех сообщений — сохраняем пользователей
 async def save_user_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"save_user_handler: {update.message.text if update.message else 'no text'}")
     if update.effective_user:
         user = update.effective_user
         save_user(str(user.id), user.username, user.full_name)
