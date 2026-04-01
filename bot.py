@@ -345,10 +345,9 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
         user_id_str = str(update.effective_user.id)
         top_url = f"{WORDLE_WEB_URL}/top?user_id={user_id_str}"
         await update.message.reply_text(
-            f"🍒 *CherryWordle*\n\n"
+            f"🍒 CherryWordle\n\n"
             f"Посмотрите топ игроков и начните игру:\n{top_url}\n\n"
-            f"Нажмите кнопку «Играть» на странице, чтобы получить код.",
-            parse_mode='Markdown'
+            f"Нажмите кнопку «Играть» на странице, чтобы получить код."
         )
 
     # ---------- !режим ----------
