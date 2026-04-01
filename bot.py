@@ -715,16 +715,21 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
 # ------------------------------------------------------------
 # Автоскачивание видео
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info("handle_url called")
     global maintenance_mode
 
     if not update.message or not update.message.text:
+        logger.info("no text")
         return
 
     text = update.message.text
+    logger.info(f"text: {text}")
     url_match = re.search(r'(https?://\S+)', text)
     if not url_match:
+        logger.info("no url")
         return
     url = url_match.group(0)
+    logger.info(f"url: {url}")
 
     if maintenance_mode:
         if update.effective_chat.type != 'private' or not is_superadmin(str(update.effective_user.id)):
@@ -749,6 +754,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif re.search(r'(vk\.com/video|vk\.com/clip|vk\.ru|youtu\.be|youtube\.com)', url):
         await update.message.reply_text("🔧 Функция скачивания для VK и YouTube в разработке. Пока что можно скачивать только TikTok.")
     else:
+        logger.info("unsupported url")
         return
 
 # ------------------------------------------------------------
@@ -913,12 +919,14 @@ def main():
 
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^!'), handle_prefix_commands))
 
-    # Обработчик WebApp (все сообщения, но проверяем внутри)
-    app.add_handler(MessageHandler(filters.ALL, webapp_data_handler))
-
+    # Обработка ссылок – должна быть до всех остальных текстовых
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url), group=0)
+
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_fix_layout), group=1)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cherry_mode_response), group=2)
+
+    # WebApp – после всех остальных
+    app.add_handler(MessageHandler(filters.ALL, webapp_data_handler))
 
     logger.info("Cherry Bot запущен")
     app.run_polling(drop_pending_updates=True)
