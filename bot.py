@@ -819,7 +819,6 @@ async def cherry_mode_response(update: Update, context: ContextTypes.DEFAULT_TYP
 # ------------------------------------------------------------
 # Обработчик WebApp данных
 async def webapp_data_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Проверяем, что это сообщение с данными от WebApp
     if not update.message or not update.message.web_app_data:
         return
     user_id = str(update.effective_user.id)
