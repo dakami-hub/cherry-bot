@@ -51,6 +51,9 @@ last_ai_reply = {}
 init_db()
 init_wordle_db()
 
+# Для запроса имени
+awaiting_name = {}
+
 # ------------------------------------------------------------
 # Настройки
 def get_mode(chat_id: str) -> str:
@@ -152,6 +155,30 @@ async def save_user_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user:
         user = update.effective_user
         save_user(str(user.id), user.username, user.full_name)
+
+# ------------------------------------------------------------
+# Обработчик ввода имени
+async def name_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    if user_id in awaiting_name:
+        name = update.message.text.strip()
+        if not name:
+            await update.message.reply_text("Имя не может быть пустым. Попробуйте ещё раз.")
+            return
+        async with httpx.AsyncClient() as client:
+            try:
+                resp = await client.post(
+                    f"{WORDLE_WEB_URL}/set_name",
+                    json={"telegram_id": user_id, "name": name}
+                )
+                if resp.status_code == 200:
+                    del awaiting_name[user_id]
+                    await update.message.reply_text(f"✅ Имя «{name}» сохранено! Теперь вы можете играть, отправив !cherrywordle.")
+                else:
+                    await update.message.reply_text("❌ Ошибка сохранения имени. Попробуйте позже.")
+            except Exception as e:
+                logger.error(f"Name save error: {e}")
+                await update.message.reply_text("❌ Не удалось подключиться к серверу.")
 
 # ------------------------------------------------------------
 # Проверка доступности сервисов для команды !тест
@@ -342,13 +369,32 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
 
     # ---------- !cherrywordle ----------
     elif cmd == "cherrywordle":
-        user_id_str = str(update.effective_user.id)
-        top_url = f"{WORDLE_WEB_URL}/top?user_id={user_id_str}"
-        await update.message.reply_text(
-            f"🍒 CherryWordle\n\n"
-            f"Посмотрите топ игроков и начните игру:\n{top_url}\n\n"
-            f"Нажмите кнопку «Играть» на странице, чтобы получить код."
-        )
+        user_id = str(update.effective_user.id)
+        async with httpx.AsyncClient() as client:
+            try:
+                resp = await client.get(f"{WORDLE_WEB_URL}/get_name?telegram_id={user_id}")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get("display_name"):
+                        # Имя есть, отправляем ссылку на топ
+                        top_url = f"{WORDLE_WEB_URL}/top?user_id={user_id}"
+                        await update.message.reply_text(
+                            f"🍒 CherryWordle\n\n"
+                            f"Посмотрите топ игроков и начните игру:\n{top_url}\n\n"
+                            f"Нажмите кнопку «Играть» на странице, чтобы получить код."
+                        )
+                    else:
+                        # Имени нет, просим ввести
+                        awaiting_name[user_id] = True
+                        await update.message.reply_text(
+                            "🍒 Добро пожаловать в CherryWordle!\n"
+                            "Придумайте себе имя (латиница или кириллица, без пробелов):"
+                        )
+                else:
+                    await update.message.reply_text("❌ Ошибка проверки имени. Попробуйте позже.")
+            except Exception as e:
+                logger.error(f"Name check error: {e}")
+                await update.message.reply_text("❌ Не удалось подключиться к серверу.")
 
     # ---------- !режим ----------
     elif cmd == "режим":
@@ -831,6 +877,9 @@ def main():
     # Сохраняем всех пользователей, кто пишет
     app.add_handler(MessageHandler(filters.ALL, save_user_handler), group=-1)
 
+    # Обработчик ввода имени (до всех остальных)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, name_input_handler), group=0)
+
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("clear", clear_ai_history))
@@ -838,9 +887,9 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^!'), handle_prefix_commands))
 
     # Обработка ссылок – должна быть до всех остальных текстовых
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url), group=0)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_fix_layout), group=1)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cherry_mode_response), group=2)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url), group=1)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_fix_layout), group=2)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cherry_mode_response), group=3)
 
     logger.info("Cherry Bot запущен")
     app.run_polling(drop_pending_updates=True)
