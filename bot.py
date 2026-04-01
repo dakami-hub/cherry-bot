@@ -49,7 +49,7 @@ SUPERADMIN_USERNAME = "dakamiwannadielmaowhatabozo"    # запасной вар
 
 last_ai_reply = {}
 init_db()
-init_wordle_db()   # инициализация таблиц Wordle (внутренних, если используются; для веб-версии не обязательны)
+init_wordle_db()
 
 # ------------------------------------------------------------
 # Настройки
@@ -88,7 +88,6 @@ async def send_typing(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if args and args[0] == "wordle":
-        # Генерация кода для игры
         user = update.effective_user
         user_id = str(user.id)
         async with httpx.AsyncClient() as client:
@@ -118,7 +117,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Wordle start error: {e}")
                 await update.message.reply_text("❌ Не удалось подключиться к серверу игры.")
     else:
-        # Обычный /start
         await update.message.reply_text(
             "🍒 Привет! Я Черри.\n"
             "По умолчанию я в режиме *normal* — не отвечаю сама, только по командам.\n"
@@ -344,7 +342,8 @@ async def handle_prefix_commands(update: Update, context: ContextTypes.DEFAULT_T
 
     # ---------- !cherrywordle ----------
     elif cmd == "cherrywordle":
-        top_url = f"{WORDLE_WEB_URL}/top"
+        user_id_str = str(update.effective_user.id)
+        top_url = f"{WORDLE_WEB_URL}/top?user_id={user_id_str}"
         await update.message.reply_text(
             f"🍒 *CherryWordle*\n\n"
             f"Посмотрите топ игроков и начните игру:\n{top_url}\n\n"
