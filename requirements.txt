@@ -1,7 +1,2 @@
 python-telegram-bot==20.8
-groq==0.4.2
-python-dotenv==1.0.0
 yt-dlp==2024.4.9
-gtts==2.5.0
-requests==2.31.0
-tavily-python==0.3.0
