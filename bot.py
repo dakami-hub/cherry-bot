@@ -5,8 +5,8 @@ import yt_dlp
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from db import init_db, add_debt, repay_debt, get_debts_for_user, save_chat_member, get_chat_members
+from keyboard import fix_keyboard
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ def download_audio(url: str) -> str | None:
         logger.error(f"Audio download error: {e}")
         return None
 
-# -------------------- Обработчик сообщений --------------------
+# -------------------- Обработчик --------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -97,28 +97,53 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.effective_user.username or ""
     chat_id = str(update.effective_chat.id)
 
-    # Сохраняем участника в базу
+    # Сохраняем участника в базу (для @all)
     save_chat_member(chat_id, user_id, username, user_name)
 
-    # Команда @all
+    # ---------- !команды ----------
+    if text == "!команды":
+        help_text = (
+            "📋 *Список команд:*\n\n"
+            "🎵 `!звук ссылка` – скачать аудио из TikTok\n"
+            "📥 `ссылка на TikTok` – скачать видео/фото\n"
+            "💰 `!должен @username сумма описание` – записать долг (вы должны)\n"
+            "💸 `!вернул @username сумма` – отметить возврат долга\n"
+            "📊 `!долги` – показать ваши долги\n"
+            "🔁 `!нз текст` – исправить сбившуюся раскладку (ниггер заражен)\n"
+            "👥 `@all` – упомянуть всех участников чата (бот должен помнить их)\n\n"
+            "ℹ️ Бот автоматически скачивает TikTok по ссылке."
+        )
+        await update.message.reply_text(help_text, parse_mode='Markdown')
+        return
+
+    # ---------- !нз ----------
+    if text.startswith("!нз"):
+        # Извлекаем текст после команды
+        args = text[3:].strip()
+        if not args:
+            await update.message.reply_text("Напиши: !нз текст (или ответь на сообщение)")
+            return
+        fixed = fix_keyboard(args)
+        await update.message.reply_text(f"🔁 Исправлено: {fixed}")
+        return
+
+    # ---------- @all ----------
     if text.lower().startswith('@all'):
         members = get_chat_members(chat_id)
         if not members:
             await update.message.reply_text("Пока нет сохранённых участников. Напишите что-нибудь в чат, чтобы бот запомнил вас.")
             return
         mentions = []
-        for uid, uname, full_name in members:
-            # Не упоминаем самого отправителя
+        for uid, uname, fname in members:
             if uid == user_id:
                 continue
             if uname:
                 mentions.append(f"@{uname}")
             else:
-                mentions.append(full_name or uid)
+                mentions.append(fname or uid)
         if not mentions:
             await update.message.reply_text("Нет других участников для упоминания.")
             return
-        # Отправляем сообщение
         message = "Всем привет! " + " ".join(mentions)
         if len(message) > 4096:
             for i in range(0, len(mentions), 50):
@@ -128,7 +153,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(message)
         return
 
-    # Команда !звук
+    # ---------- !звук ----------
     if text.startswith('!звук'):
         url_match = re.search(r'(https?://\S+)', text)
         if not url_match:
@@ -146,9 +171,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Не удалось скачать аудио.")
         return
 
-    # Система долгов (без восклицательного знака)
-    lower_text = text.lower()
-    if lower_text.startswith('должен'):
+    # ---------- Долги (с !) ----------
+    if text.startswith('!должен'):
+        # !должен @username сумма описание
         parts = text.split(maxsplit=3)
         if len(parts) < 3:
             return
@@ -173,7 +198,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ Записал: вы должны {creditor_name} {amount} руб. ({description})")
         return
 
-    if lower_text.startswith('вернул'):
+    if text.startswith('!вернул'):
+        # !вернул @username сумма
         parts = text.split(maxsplit=2)
         if len(parts) < 2:
             return
@@ -198,12 +224,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Не найден активный долг с такой суммой.")
         return
 
-    if lower_text.startswith('долги'):
+    if text.startswith('!долги'):
         debts_str = get_debts_for_user(chat_id, user_id)
         await update.message.reply_text(debts_str)
         return
 
-    # Скачивание TikTok
+    # ---------- Скачивание TikTok по ссылке (без команды) ----------
     url_match = re.search(r'(https?://\S+)', text)
     if not url_match:
         return
