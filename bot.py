@@ -4,7 +4,7 @@ import logging
 import yt_dlp
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
-from db import init_db, add_debt, repay_debt, get_debts_for_user
+from db import init_db, add_debt, repay_debt, get_debts_for_user, save_chat_member, get_chat_members
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -25,7 +25,6 @@ def get_ffmpeg_path():
     return 'ffmpeg'
 
 def download_tiktok(url: str):
-    """Скачивает видео или фото из TikTok (с куками, если есть)."""
     os.makedirs("downloads", exist_ok=True)
     cookies_file = "cookies.txt" if os.path.exists("cookies.txt") else None
     opts = {
@@ -88,63 +87,48 @@ def download_audio(url: str) -> str | None:
         logger.error(f"Audio download error: {e}")
         return None
 
-# -------------------- Команда @all --------------------
-async def mention_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отправляет одно сообщение с упоминанием всех участников чата."""
-    chat_id = update.effective_chat.id
-    # Проверяем, что команда пришла из группы
-    if update.effective_chat.type not in ['group', 'supergroup']:
-        await update.message.reply_text("Эта команда работает только в группах.")
+# -------------------- Обработчик сообщений --------------------
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
         return
-    # Получаем всех участников чата (требует прав администратора)
-    try:
-        # Получаем список участников (может быть медленно для больших групп)
-        # Используем get_chat_members с фильтром, но проще пройти по всем
-        # Однако Telegram ограничивает количество запросов. Для больших групп лучше использовать get_chat_administrators?
-        # Но нам нужны все участники. Используем get_chat_members с итерацией.
-        # Ограничимся первыми 200, чтобы не перегружать.
-        members = []
-        async for member in context.bot.get_chat_members(chat_id):
-            # Пропускаем ботов
-            if not member.user.is_bot:
-                members.append(member.user)
+    text = update.message.text.strip()
+    user_id = str(update.effective_user.id)
+    user_name = update.effective_user.full_name or user_id
+    username = update.effective_user.username or ""
+    chat_id = str(update.effective_chat.id)
+
+    # Сохраняем участника в базу
+    save_chat_member(chat_id, user_id, username, user_name)
+
+    # Команда @all
+    if text.lower().startswith('@all'):
+        members = get_chat_members(chat_id)
         if not members:
-            await update.message.reply_text("Не удалось найти участников (возможно, бот не админ).")
+            await update.message.reply_text("Пока нет сохранённых участников. Напишите что-нибудь в чат, чтобы бот запомнил вас.")
             return
-        # Формируем упоминания (@username или full_name)
         mentions = []
-        for user in members:
-            if user.username:
-                mentions.append(f"@{user.username}")
+        for uid, uname, full_name in members:
+            # Не упоминаем самого отправителя
+            if uid == user_id:
+                continue
+            if uname:
+                mentions.append(f"@{uname}")
             else:
-                # Если нет username, используем имя (но упоминание не сработает, просто текст)
-                mentions.append(user.full_name or str(user.id))
-        # Разбиваем на части, чтобы не превысить лимит сообщения (4096 символов)
+                mentions.append(full_name or uid)
+        if not mentions:
+            await update.message.reply_text("Нет других участников для упоминания.")
+            return
+        # Отправляем сообщение
         message = "Всем привет! " + " ".join(mentions)
         if len(message) > 4096:
-            # Если слишком длинное, отправляем несколькими сообщениями
             for i in range(0, len(mentions), 50):
                 part = " ".join(mentions[i:i+50])
                 await update.message.reply_text(f"Упоминания: {part}")
         else:
             await update.message.reply_text(message)
-    except Exception as e:
-        logger.error(f"Error in @all: {e}")
-        await update.message.reply_text("Ошибка при получении участников. Убедитесь, что бот имеет права администратора.")
-
-# -------------------- Обработчик сообщений --------------------
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    user_id = str(update.effective_user.id)
-    user_name = update.effective_user.full_name or user_id
-    chat_id = str(update.effective_chat.id)
-
-    # Обработка команды @all (должна быть в начале сообщения)
-    if text.lower().startswith('@all'):
-        await mention_all(update, context)
         return
 
-    # 1. Команда !звук
+    # Команда !звук
     if text.startswith('!звук'):
         url_match = re.search(r'(https?://\S+)', text)
         if not url_match:
@@ -162,7 +146,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Не удалось скачать аудио.")
         return
 
-    # 2. Система долгов (без восклицательного знака)
+    # Система долгов (без восклицательного знака)
     lower_text = text.lower()
     if lower_text.startswith('должен'):
         parts = text.split(maxsplit=3)
@@ -219,7 +203,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(debts_str)
         return
 
-    # 3. Скачивание TikTok (только если сообщение содержит ссылку)
+    # Скачивание TikTok
     url_match = re.search(r'(https?://\S+)', text)
     if not url_match:
         return
