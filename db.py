@@ -1,10 +1,12 @@
 import sqlite3
 import os
 
-DB_PATH = "/app/data/bot.db"
+# Определяем путь к базе данных внутри директории проекта
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "data", "bot.db")
 
 def init_db():
-    os.makedirs("/app/data", exist_ok=True)
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     # Таблица долгов
