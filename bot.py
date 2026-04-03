@@ -1,7 +1,7 @@
 import os
 import re
 import logging
-import yt_dlp
+import requests
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from db import init_db, add_debt, repay_debt, get_debts_for_user, save_chat_member, get_chat_members
@@ -14,80 +14,80 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 if not TOKEN:
     raise ValueError("No TELEGRAM_TOKEN in environment")
 
+COBALT_URL = os.environ.get("COBALT_URL", "https://cherry-cobalt.up.railway.app")
+if not COBALT_URL:
+    raise ValueError("No COBALT_URL in environment")
+
 init_db()
 
-# -------------------- TikTok download --------------------
-def get_ffmpeg_path():
-    import glob
-    candidates = glob.glob('/nix/store/*ffmpeg*/bin/ffmpeg')
-    if candidates:
-        return candidates[0]
-    return 'ffmpeg'
-
-def download_tiktok(url: str):
-    os.makedirs("downloads", exist_ok=True)
-    cookies_file = "cookies.txt" if os.path.exists("cookies.txt") else None
-    opts = {
-        'outtmpl': 'downloads/%(id)s.%(ext)s',
-        'quiet': True,
-        'no_warnings': True,
-        'noplaylist': True,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-        'cookiefile': cookies_file,
-        'ffmpeg_location': get_ffmpeg_path(),
-    }
-    if '/photo/' in url:
-        opts['format'] = 'best'
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                filename = ydl.prepare_filename(info)
-                if os.path.exists(filename):
-                    return [filename], 'photo'
-                return None, None
-        except Exception as e:
-            logger.error(f"Photo download error: {e}")
-            return None, None
-    else:
-        opts['format'] = 'bestvideo[height<=720][ext=mp4][filesize<45M]+bestaudio[ext=m4a]/best[height<=720][ext=mp4][filesize<45M]/best'
-        opts['merge_output_format'] = 'mp4'
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                filename = ydl.prepare_filename(info)
-                return [filename], 'video'
-        except Exception as e:
-            logger.error(f"Video download error: {e}")
-            return None, None
-
-def download_audio(url: str) -> str | None:
-    os.makedirs("downloads", exist_ok=True)
-    cookies_file = "cookies.txt" if os.path.exists("cookies.txt") else None
-    opts = {
-        'outtmpl': 'downloads/%(id)s.%(ext)s',
-        'quiet': True,
-        'no_warnings': True,
-        'noplaylist': True,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-        'cookiefile': cookies_file,
-        'format': 'bestaudio/best',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'ffmpeg_location': get_ffmpeg_path(),
-    }
+# -------------------- Cobalt download --------------------
+def download_with_cobalt(url: str, is_audio: bool = False):
+    """
+    Скачивает видео/аудио через Cobalt API.
+    Возвращает (filepath, file_type) или (None, None).
+    file_type: 'video', 'audio', 'photo', 'document'
+    """
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            base = os.path.splitext(ydl.prepare_filename(info))[0]
-            return base + '.mp3'
-    except Exception as e:
-        logger.error(f"Audio download error: {e}")
-        return None
+        # Формируем запрос к Cobalt
+        payload = {
+            "url": url,
+            "downloadMode": "audio" if is_audio else "auto",
+            "videoQuality": "720" if not is_audio else None,
+            "audioFormat": "mp3" if is_audio else None,
+        }
+        # Убираем None значения
+        payload = {k: v for k, v in payload.items() if v is not None}
+        response = requests.post(f"{COBALT_URL}/api/json", json=payload, timeout=60)
+        if response.status_code != 200:
+            logger.error(f"Cobalt error: {response.status_code} {response.text}")
+            return None, None
+        data = response.json()
+        if data.get("status") != "success":
+            logger.error(f"Cobalt status error: {data}")
+            return None, None
+        file_url = data.get("url")
+        if not file_url:
+            return None, None
 
-# -------------------- Обработчик --------------------
+        # Скачиваем файл по прямой ссылке
+        file_response = requests.get(file_url, stream=True, timeout=60)
+        if file_response.status_code != 200:
+            return None, None
+
+        # Определяем тип контента по заголовку или расширению
+        content_type = file_response.headers.get("content-type", "")
+        if "video" in content_type:
+            ext = "mp4"
+            ftype = "video"
+        elif "audio" in content_type:
+            ext = "mp3"
+            ftype = "audio"
+        elif "image" in content_type:
+            ext = "jpg"
+            ftype = "photo"
+        else:
+            # Пробуем по расширению из URL
+            if ".mp4" in file_url:
+                ext = "mp4"
+                ftype = "video"
+            elif ".mp3" in file_url:
+                ext = "mp3"
+                ftype = "audio"
+            else:
+                ext = "bin"
+                ftype = "document"
+
+        os.makedirs("downloads", exist_ok=True)
+        filename = f"downloads/cobalt_{abs(hash(url))}.{ext}"
+        with open(filename, "wb") as f:
+            for chunk in file_response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        return filename, ftype
+    except Exception as e:
+        logger.error(f"Cobalt download error: {e}")
+        return None, None
+
+# -------------------- Обработчик сообщений --------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -104,21 +104,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "!команды":
         help_text = (
             "📋 *Список команд:*\n\n"
-            "🎵 `!звук ссылка` – скачать аудио из TikTok\n"
-            "📥 `ссылка на TikTok` – скачать видео/фото\n"
+            "🎵 `!звук ссылка` – скачать аудио из TikTok, YouTube, VK\n"
+            "📥 `ссылка на TikTok/YouTube/VK` – скачать видео/фото\n"
             "💰 `!должен @username сумма описание` – записать долг (вы должны)\n"
             "💸 `!вернул @username сумма` – отметить возврат долга\n"
             "📊 `!долги` – показать ваши долги\n"
             "🔁 `!нз текст` – исправить сбившуюся раскладку (ниггер заражен)\n"
-            "👥 `@all` – упомянуть всех участников чата (бот должен помнить их)\n\n"
-            "ℹ️ Бот автоматически скачивает TikTok по ссылке."
+            "👥 `@all` – упомянуть всех участников чата\n\n"
+            "ℹ️ Бот автоматически скачивает контент по ссылке."
         )
         await update.message.reply_text(help_text, parse_mode='Markdown')
         return
 
     # ---------- !нз ----------
     if text.startswith("!нз"):
-        # Извлекаем текст после команды
         args = text[3:].strip()
         if not args:
             await update.message.reply_text("Напиши: !нз текст (или ответь на сообщение)")
@@ -144,7 +143,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not mentions:
             await update.message.reply_text("Нет других участников для упоминания.")
             return
-        message = "Всем привет! " + " ".join(mentions)
+        message = "all! " + " ".join(mentions)
         if len(message) > 4096:
             for i in range(0, len(mentions), 50):
                 part = " ".join(mentions[i:i+50])
@@ -159,10 +158,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not url_match:
             return
         url = url_match.group(0)
-        if not re.search(r'(tiktok\.com|vm\.tiktok\.com)', url):
-            return
+        # Не проверяем платформу – Cobalt сам разберётся
         await update.message.reply_text("🎵 Скачиваю аудио...")
-        filepath = download_audio(url)
+        filepath, ftype = download_with_cobalt(url, is_audio=True)
         if filepath and os.path.exists(filepath):
             with open(filepath, 'rb') as f:
                 await update.message.reply_audio(audio=f, title="audio.mp3")
@@ -173,7 +171,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ---------- Долги (с !) ----------
     if text.startswith('!должен'):
-        # !должен @username сумма описание
         parts = text.split(maxsplit=3)
         if len(parts) < 3:
             return
@@ -199,7 +196,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text.startswith('!вернул'):
-        # !вернул @username сумма
         parts = text.split(maxsplit=2)
         if len(parts) < 2:
             return
@@ -229,36 +225,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(debts_str)
         return
 
-    # ---------- Скачивание TikTok по ссылке (без команды) ----------
+    # ---------- Скачивание по ссылке (автоопределение) ----------
     url_match = re.search(r'(https?://\S+)', text)
     if not url_match:
         return
     url = url_match.group(0)
-    if not re.search(r'(tiktok\.com|vm\.tiktok\.com)', url):
-        return
+    # Не фильтруем платформы – Cobalt сам определит
     await update.message.reply_text("📥 Скачиваю...")
-    files, content_type = download_tiktok(url)
-    if not files:
-        await update.message.reply_text("Не удалось скачать. Возможно, ссылка требует авторизации (нужны куки).")
+    filepath, ftype = download_with_cobalt(url, is_audio=False)
+    if not filepath or not os.path.exists(filepath):
+        await update.message.reply_text("Не удалось скачать. Возможно, ссылка не поддерживается.")
         return
-    if content_type == 'video':
-        for f in files:
-            if os.path.exists(f):
-                with open(f, 'rb') as vid:
-                    await update.message.reply_video(video=vid)
-                os.remove(f)
-    elif content_type == 'photo':
-        media_group = []
-        for f in files:
-            if os.path.exists(f):
-                media_group.append({'type': 'photo', 'media': open(f, 'rb')})
-        if media_group:
-            await update.message.reply_media_group(media_group)
-            for item in media_group:
-                item['media'].close()
-                os.remove(item['media'].name)
-        else:
-            await update.message.reply_text("Не удалось отправить фото.")
+
+    # Отправляем в зависимости от типа
+    if ftype == "video":
+        with open(filepath, 'rb') as f:
+            await update.message.reply_video(video=f)
+    elif ftype == "audio":
+        with open(filepath, 'rb') as f:
+            await update.message.reply_audio(audio=f, title="audio.mp3")
+    elif ftype == "photo":
+        with open(filepath, 'rb') as f:
+            await update.message.reply_photo(photo=f)
+    else:
+        with open(filepath, 'rb') as f:
+            await update.message.reply_document(document=f)
+    os.remove(filepath)
 
 # -------------------- Запуск --------------------
 def main():
