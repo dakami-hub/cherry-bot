@@ -1,12 +1,14 @@
 import os
 import re
 import logging
+import time
 import requests
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from db import init_db, add_debt, repay_debt, get_debts_for_user, save_chat_member, get_chat_members
 from keyboard import fix_keyboard
 
+# Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -14,77 +16,101 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 if not TOKEN:
     raise ValueError("No TELEGRAM_TOKEN in environment")
 
-COBALT_URL = os.environ.get("COBALT_URL", "https://cherry-cobalt.up.railway.app")
-if not COBALT_URL:
-    raise ValueError("No COBALT_URL in environment")
+RECLIP_URL = os.environ.get("RECLIP_URL")
+if not RECLIP_URL:
+    logger.warning("RECLIP_URL not set, video downloading will not work")
 
 init_db()
 
-# -------------------- Cobalt download --------------------
-def download_with_cobalt(url: str, is_audio: bool = False):
-    """
-    Скачивает видео/аудио через Cobalt API.
-    Возвращает (filepath, file_type) или (None, None).
-    file_type: 'video', 'audio', 'photo', 'document'
-    """
+# -------------------- ReClip download --------------------
+def download_with_reclip(url: str, is_audio: bool = False):
+    """Скачивает через ReClip. Возвращает (filepath, file_type) или (None, None)."""
+    if not RECLIP_URL:
+        logger.error("RECLIP_URL not configured")
+        return None, None
+
     try:
-        # Формируем запрос к Cobalt
-        payload = {
-            "url": url,
-            "downloadMode": "audio" if is_audio else "auto",
-            "videoQuality": "720" if not is_audio else None,
-            "audioFormat": "mp3" if is_audio else None,
-        }
-        # Убираем None значения
-        payload = {k: v for k, v in payload.items() if v is not None}
-        response = requests.post(f"{COBALT_URL}/api/json", json=payload, timeout=60)
-        if response.status_code != 200:
-            logger.error(f"Cobalt error: {response.status_code} {response.text}")
-            return None, None
-        data = response.json()
-        if data.get("status") != "success":
-            logger.error(f"Cobalt status error: {data}")
-            return None, None
-        file_url = data.get("url")
-        if not file_url:
+        # 1. Получаем информацию о видео
+        info_resp = requests.post(
+            f"{RECLIP_URL}/api/info",
+            json={"url": url},
+            timeout=30
+        )
+        if info_resp.status_code != 200:
+            logger.error(f"ReClip info error: {info_resp.status_code} {info_resp.text}")
             return None, None
 
-        # Скачиваем файл по прямой ссылке
-        file_response = requests.get(file_url, stream=True, timeout=60)
-        if file_response.status_code != 200:
-            return None, None
-
-        # Определяем тип контента по заголовку или расширению
-        content_type = file_response.headers.get("content-type", "")
-        if "video" in content_type:
-            ext = "mp4"
-            ftype = "video"
-        elif "audio" in content_type:
-            ext = "mp3"
-            ftype = "audio"
-        elif "image" in content_type:
-            ext = "jpg"
-            ftype = "photo"
+        info = info_resp.json()
+        formats = info.get("formats", [])
+        # Для аудио используем специальный режим, для видео выбираем лучший формат
+        if is_audio:
+            format_choice = "audio"
+            format_id = None
         else:
-            # Пробуем по расширению из URL
-            if ".mp4" in file_url:
-                ext = "mp4"
-                ftype = "video"
-            elif ".mp3" in file_url:
-                ext = "mp3"
-                ftype = "audio"
-            else:
-                ext = "bin"
-                ftype = "document"
+            format_choice = "video"
+            # Выбираем формат с наибольшим разрешением (height)
+            best_format = max(formats, key=lambda f: f.get("height", 0) if f.get("height") else 0)
+            format_id = best_format.get("id")
 
-        os.makedirs("downloads", exist_ok=True)
-        filename = f"downloads/cobalt_{abs(hash(url))}.{ext}"
-        with open(filename, "wb") as f:
-            for chunk in file_response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        return filename, ftype
+        # 2. Запускаем загрузку
+        job_resp = requests.post(
+            f"{RECLIP_URL}/api/download",
+            json={"url": url, "format_choice": format_choice, "format_id": format_id},
+            timeout=60
+        )
+        if job_resp.status_code != 200:
+            logger.error(f"ReClip download error: {job_resp.status_code} {job_resp.text}")
+            return None, None
+
+        job = job_resp.json()
+        job_id = job.get("job_id")
+        if not job_id:
+            return None, None
+
+        # 3. Опрашиваем статус до завершения (максимум 30 секунд)
+        for _ in range(30):
+            status_resp = requests.get(f"{RECLIP_URL}/api/status/{job_id}", timeout=10)
+            if status_resp.status_code != 200:
+                break
+            status = status_resp.json()
+            if status.get("status") == "done":
+                file_url = status.get("file_url")
+                if not file_url:
+                    break
+                # Скачиваем файл по прямой ссылке
+                file_resp = requests.get(file_url, stream=True, timeout=60)
+                if file_resp.status_code != 200:
+                    break
+                # Определяем тип контента
+                content_type = file_resp.headers.get("content-type", "")
+                if "video" in content_type:
+                    ext = "mp4"
+                    ftype = "video"
+                elif "audio" in content_type:
+                    ext = "mp3"
+                    ftype = "audio"
+                elif "image" in content_type:
+                    ext = "jpg"
+                    ftype = "photo"
+                else:
+                    ext = "bin"
+                    ftype = "document"
+
+                os.makedirs("downloads", exist_ok=True)
+                filename = f"downloads/reclip_{abs(hash(url))}.{ext}"
+                with open(filename, "wb") as f:
+                    for chunk in file_resp.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                return filename, ftype
+            elif status.get("status") == "error":
+                logger.error(f"ReClip job error: {status.get('error')}")
+                return None, None
+            time.sleep(1)
+
+        logger.error("ReClip download timeout")
+        return None, None
     except Exception as e:
-        logger.error(f"Cobalt download error: {e}")
+        logger.error(f"ReClip download error: {e}")
         return None, None
 
 # -------------------- Обработчик сообщений --------------------
@@ -143,7 +169,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not mentions:
             await update.message.reply_text("Нет других участников для упоминания.")
             return
-        message = "all! " + " ".join(mentions)
+        message = "Всем привет! " + " ".join(mentions)
         if len(message) > 4096:
             for i in range(0, len(mentions), 50):
                 part = " ".join(mentions[i:i+50])
@@ -158,9 +184,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not url_match:
             return
         url = url_match.group(0)
-        # Не проверяем платформу – Cobalt сам разберётся
         await update.message.reply_text("🎵 Скачиваю аудио...")
-        filepath, ftype = download_with_cobalt(url, is_audio=True)
+        filepath, ftype = download_with_reclip(url, is_audio=True)
         if filepath and os.path.exists(filepath):
             with open(filepath, 'rb') as f:
                 await update.message.reply_audio(audio=f, title="audio.mp3")
@@ -230,9 +255,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not url_match:
         return
     url = url_match.group(0)
-    # Не фильтруем платформы – Cobalt сам определит
     await update.message.reply_text("📥 Скачиваю...")
-    filepath, ftype = download_with_cobalt(url, is_audio=False)
+    filepath, ftype = download_with_reclip(url, is_audio=False)
     if not filepath or not os.path.exists(filepath):
         await update.message.reply_text("Не удалось скачать. Возможно, ссылка не поддерживается.")
         return
