@@ -1,14 +1,12 @@
 import os
 import re
 import logging
-import time
-import requests
+import yt_dlp
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from db import init_db, add_debt, repay_debt, get_debts_for_user, save_chat_member, get_chat_members
 from keyboard import fix_keyboard
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -16,102 +14,67 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 if not TOKEN:
     raise ValueError("No TELEGRAM_TOKEN in environment")
 
-RECLIP_URL = os.environ.get("RECLIP_URL")
-if not RECLIP_URL:
-    logger.warning("RECLIP_URL not set, video downloading will not work")
-
 init_db()
 
-# -------------------- ReClip download --------------------
-def download_with_reclip(url: str, is_audio: bool = False):
-    """Скачивает через ReClip. Возвращает (filepath, file_type) или (None, None)."""
-    if not RECLIP_URL:
-        logger.error("RECLIP_URL not configured")
-        return None, None
+# -------------------- yt-dlp download --------------------
+def get_ffmpeg_path():
+    import glob
+    candidates = glob.glob('/nix/store/*ffmpeg*/bin/ffmpeg')
+    if candidates:
+        return candidates[0]
+    return 'ffmpeg'
 
+def download_video(url: str) -> str | None:
+    """Скачивает видео в mp4 (до 50 МБ, 720p)."""
+    os.makedirs("downloads", exist_ok=True)
+    opts = {
+        'outtmpl': 'downloads/%(id)s.%(ext)s',
+        'quiet': True,
+        'no_warnings': True,
+        'noplaylist': True,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        'format': 'bestvideo[height<=720][ext=mp4][filesize<45M]+bestaudio[ext=m4a]/best[height<=720][ext=mp4][filesize<45M]/best',
+        'merge_output_format': 'mp4',
+        'ffmpeg_location': get_ffmpeg_path(),
+    }
+    # Добавляем куки, если есть
+    if os.path.exists("cookies.txt"):
+        opts['cookiefile'] = "cookies.txt"
     try:
-        # 1. Получаем информацию о видео
-        info_resp = requests.post(
-            f"{RECLIP_URL}/api/info",
-            json={"url": url},
-            timeout=30
-        )
-        if info_resp.status_code != 200:
-            logger.error(f"ReClip info error: {info_resp.status_code} {info_resp.text}")
-            return None, None
-
-        info = info_resp.json()
-        formats = info.get("formats", [])
-        # Для аудио используем специальный режим, для видео выбираем лучший формат
-        if is_audio:
-            format_choice = "audio"
-            format_id = None
-        else:
-            format_choice = "video"
-            # Выбираем формат с наибольшим разрешением (height)
-            best_format = max(formats, key=lambda f: f.get("height", 0) if f.get("height") else 0)
-            format_id = best_format.get("id")
-
-        # 2. Запускаем загрузку
-        job_resp = requests.post(
-            f"{RECLIP_URL}/api/download",
-            json={"url": url, "format_choice": format_choice, "format_id": format_id},
-            timeout=60
-        )
-        if job_resp.status_code != 200:
-            logger.error(f"ReClip download error: {job_resp.status_code} {job_resp.text}")
-            return None, None
-
-        job = job_resp.json()
-        job_id = job.get("job_id")
-        if not job_id:
-            return None, None
-
-        # 3. Опрашиваем статус до завершения (максимум 30 секунд)
-        for _ in range(30):
-            status_resp = requests.get(f"{RECLIP_URL}/api/status/{job_id}", timeout=10)
-            if status_resp.status_code != 200:
-                break
-            status = status_resp.json()
-            if status.get("status") == "done":
-                file_url = status.get("file_url")
-                if not file_url:
-                    break
-                # Скачиваем файл по прямой ссылке
-                file_resp = requests.get(file_url, stream=True, timeout=60)
-                if file_resp.status_code != 200:
-                    break
-                # Определяем тип контента
-                content_type = file_resp.headers.get("content-type", "")
-                if "video" in content_type:
-                    ext = "mp4"
-                    ftype = "video"
-                elif "audio" in content_type:
-                    ext = "mp3"
-                    ftype = "audio"
-                elif "image" in content_type:
-                    ext = "jpg"
-                    ftype = "photo"
-                else:
-                    ext = "bin"
-                    ftype = "document"
-
-                os.makedirs("downloads", exist_ok=True)
-                filename = f"downloads/reclip_{abs(hash(url))}.{ext}"
-                with open(filename, "wb") as f:
-                    for chunk in file_resp.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                return filename, ftype
-            elif status.get("status") == "error":
-                logger.error(f"ReClip job error: {status.get('error')}")
-                return None, None
-            time.sleep(1)
-
-        logger.error("ReClip download timeout")
-        return None, None
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            return ydl.prepare_filename(info)
     except Exception as e:
-        logger.error(f"ReClip download error: {e}")
-        return None, None
+        logger.error(f"Video download error: {e}")
+        return None
+
+def download_audio(url: str) -> str | None:
+    """Скачивает аудио в mp3."""
+    os.makedirs("downloads", exist_ok=True)
+    opts = {
+        'outtmpl': 'downloads/%(id)s.%(ext)s',
+        'quiet': True,
+        'no_warnings': True,
+        'noplaylist': True,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        'format': 'bestaudio/best',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+        'ffmpeg_location': get_ffmpeg_path(),
+    }
+    if os.path.exists("cookies.txt"):
+        opts['cookiefile'] = "cookies.txt"
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            base = os.path.splitext(ydl.prepare_filename(info))[0]
+            return base + '.mp3'
+    except Exception as e:
+        logger.error(f"Audio download error: {e}")
+        return None
 
 # -------------------- Обработчик сообщений --------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -123,7 +86,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.effective_user.username or ""
     chat_id = str(update.effective_chat.id)
 
-    # Сохраняем участника в базу (для @all)
     save_chat_member(chat_id, user_id, username, user_name)
 
     # ---------- !команды ----------
@@ -131,13 +93,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         help_text = (
             "📋 *Список команд:*\n\n"
             "🎵 `!звук ссылка` – скачать аудио из TikTok, YouTube, VK\n"
-            "📥 `ссылка на TikTok/YouTube/VK` – скачать видео/фото\n"
+            "📥 `ссылка на TikTok/YouTube/VK` – скачать видео\n"
             "💰 `!должен @username сумма описание` – записать долг (вы должны)\n"
             "💸 `!вернул @username сумма` – отметить возврат долга\n"
             "📊 `!долги` – показать ваши долги\n"
-            "🔁 `!нз текст` – исправить сбившуюся раскладку (ниггер заражен)\n"
+            "🔁 `!нз текст` – исправить сбившуюся раскладку\n"
             "👥 `@all` – упомянуть всех участников чата\n\n"
-            "ℹ️ Бот автоматически скачивает контент по ссылке."
+            "ℹ️ Бот автоматически скачивает видео по ссылке."
         )
         await update.message.reply_text(help_text, parse_mode='Markdown')
         return
@@ -185,7 +147,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         url = url_match.group(0)
         await update.message.reply_text("🎵 Скачиваю аудио...")
-        filepath, ftype = download_with_reclip(url, is_audio=True)
+        filepath = download_audio(url)
         if filepath and os.path.exists(filepath):
             with open(filepath, 'rb') as f:
                 await update.message.reply_audio(audio=f, title="audio.mp3")
@@ -250,31 +212,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(debts_str)
         return
 
-    # ---------- Скачивание по ссылке (автоопределение) ----------
+    # ---------- Скачивание видео по ссылке ----------
     url_match = re.search(r'(https?://\S+)', text)
     if not url_match:
         return
     url = url_match.group(0)
-    await update.message.reply_text("📥 Скачиваю...")
-    filepath, ftype = download_with_reclip(url, is_audio=False)
-    if not filepath or not os.path.exists(filepath):
-        await update.message.reply_text("Не удалось скачать. Возможно, ссылка не поддерживается.")
-        return
-
-    # Отправляем в зависимости от типа
-    if ftype == "video":
+    await update.message.reply_text("📥 Скачиваю видео...")
+    filepath = download_video(url)
+    if filepath and os.path.exists(filepath):
         with open(filepath, 'rb') as f:
             await update.message.reply_video(video=f)
-    elif ftype == "audio":
-        with open(filepath, 'rb') as f:
-            await update.message.reply_audio(audio=f, title="audio.mp3")
-    elif ftype == "photo":
-        with open(filepath, 'rb') as f:
-            await update.message.reply_photo(photo=f)
+        os.remove(filepath)
     else:
-        with open(filepath, 'rb') as f:
-            await update.message.reply_document(document=f)
-    os.remove(filepath)
+        await update.message.reply_text("Не удалось скачать видео. Возможно, ссылка не поддерживается или требуется авторизация.")
 
 # -------------------- Запуск --------------------
 def main():
