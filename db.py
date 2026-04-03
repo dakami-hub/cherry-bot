@@ -1,12 +1,13 @@
 import sqlite3
 import os
 
-DB_PATH = "/app/data/debts.db"
+DB_PATH = "/app/data/bot.db"
 
 def init_db():
     os.makedirs("/app/data", exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    # Таблица долгов
     c.execute('''
         CREATE TABLE IF NOT EXISTS debts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -19,6 +20,17 @@ def init_db():
             description TEXT,
             repaid INTEGER DEFAULT 0,
             date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    # Таблица участников чатов
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS chat_members (
+            chat_id TEXT,
+            user_id TEXT,
+            username TEXT,
+            full_name TEXT,
+            last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (chat_id, user_id)
         )
     ''')
     conn.commit()
@@ -36,7 +48,6 @@ def add_debt(chat_id: str, creditor_id: str, creditor_name: str,
     conn.close()
 
 def repay_debt(chat_id: str, creditor_id: str, debtor_id: str, amount: float) -> bool:
-    """Погашает часть долга (списывает с самых старых)"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''
@@ -95,3 +106,24 @@ def get_debts_for_user(chat_id: str, user_id: str) -> str:
             total += amt
         lines.append(f"   Итого: {total:.2f} руб.")
     return "\n".join(lines)
+
+def save_chat_member(chat_id: str, user_id: str, username: str, full_name: str):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+        INSERT OR REPLACE INTO chat_members (chat_id, user_id, username, full_name, last_seen)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ''', (chat_id, user_id, username, full_name))
+    conn.commit()
+    conn.close()
+
+def get_chat_members(chat_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+        SELECT user_id, username, full_name FROM chat_members
+        WHERE chat_id = ?
+    ''', (chat_id,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
