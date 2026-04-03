@@ -1,15 +1,12 @@
 import sqlite3
 import os
 
-# Определяем путь к базе данных внутри директории проекта
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "data", "bot.db")
+DB_PATH = "/app/data/bot.db"
 
 def init_db():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    os.makedirs("/app/data", exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # Таблица долгов
     c.execute('''
         CREATE TABLE IF NOT EXISTS debts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24,7 +21,6 @@ def init_db():
             date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Таблица участников чатов
     c.execute('''
         CREATE TABLE IF NOT EXISTS chat_members (
             chat_id TEXT,
