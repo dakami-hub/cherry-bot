@@ -27,7 +27,6 @@ def get_ffmpeg_path():
 def download_tiktok(url: str):
     """Скачивает видео или фото из TikTok (с куками, если есть)."""
     os.makedirs("downloads", exist_ok=True)
-    # Проверяем наличие cookies.txt
     cookies_file = "cookies.txt" if os.path.exists("cookies.txt") else None
     opts = {
         'outtmpl': 'downloads/%(id)s.%(ext)s',
@@ -38,26 +37,19 @@ def download_tiktok(url: str):
         'cookiefile': cookies_file,
         'ffmpeg_location': get_ffmpeg_path(),
     }
-    # Определяем тип контента по URL
     if '/photo/' in url:
-        # Фото: используем формат best, но yt-dlp может не поддерживать, пробуем другой подход
         opts['format'] = 'best'
-        # Добавляем --write-all-thumbnails не работает для фото, лучше использовать отдельный extractor
-        # Но для простоты попробуем скачать как есть
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 filename = ydl.prepare_filename(info)
-                # Если это фото, файл может быть .jpg/.png
                 if os.path.exists(filename):
                     return [filename], 'photo'
-                else:
-                    return None, None
+                return None, None
         except Exception as e:
             logger.error(f"Photo download error: {e}")
             return None, None
     else:
-        # Видео
         opts['format'] = 'bestvideo[height<=720][ext=mp4][filesize<45M]+bestaudio[ext=m4a]/best[height<=720][ext=mp4][filesize<45M]/best'
         opts['merge_output_format'] = 'mp4'
         try:
@@ -96,6 +88,50 @@ def download_audio(url: str) -> str | None:
         logger.error(f"Audio download error: {e}")
         return None
 
+# -------------------- Команда @all --------------------
+async def mention_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправляет одно сообщение с упоминанием всех участников чата."""
+    chat_id = update.effective_chat.id
+    # Проверяем, что команда пришла из группы
+    if update.effective_chat.type not in ['group', 'supergroup']:
+        await update.message.reply_text("Эта команда работает только в группах.")
+        return
+    # Получаем всех участников чата (требует прав администратора)
+    try:
+        # Получаем список участников (может быть медленно для больших групп)
+        # Используем get_chat_members с фильтром, но проще пройти по всем
+        # Однако Telegram ограничивает количество запросов. Для больших групп лучше использовать get_chat_administrators?
+        # Но нам нужны все участники. Используем get_chat_members с итерацией.
+        # Ограничимся первыми 200, чтобы не перегружать.
+        members = []
+        async for member in context.bot.get_chat_members(chat_id):
+            # Пропускаем ботов
+            if not member.user.is_bot:
+                members.append(member.user)
+        if not members:
+            await update.message.reply_text("Не удалось найти участников (возможно, бот не админ).")
+            return
+        # Формируем упоминания (@username или full_name)
+        mentions = []
+        for user in members:
+            if user.username:
+                mentions.append(f"@{user.username}")
+            else:
+                # Если нет username, используем имя (но упоминание не сработает, просто текст)
+                mentions.append(user.full_name or str(user.id))
+        # Разбиваем на части, чтобы не превысить лимит сообщения (4096 символов)
+        message = "Всем привет! " + " ".join(mentions)
+        if len(message) > 4096:
+            # Если слишком длинное, отправляем несколькими сообщениями
+            for i in range(0, len(mentions), 50):
+                part = " ".join(mentions[i:i+50])
+                await update.message.reply_text(f"Упоминания: {part}")
+        else:
+            await update.message.reply_text(message)
+    except Exception as e:
+        logger.error(f"Error in @all: {e}")
+        await update.message.reply_text("Ошибка при получении участников. Убедитесь, что бот имеет права администратора.")
+
 # -------------------- Обработчик сообщений --------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -103,11 +139,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.effective_user.full_name or user_id
     chat_id = str(update.effective_chat.id)
 
-    # 1. Команда !звук (оставляем)
+    # Обработка команды @all (должна быть в начале сообщения)
+    if text.lower().startswith('@all'):
+        await mention_all(update, context)
+        return
+
+    # 1. Команда !звук
     if text.startswith('!звук'):
         url_match = re.search(r'(https?://\S+)', text)
         if not url_match:
-            return  # игнорируем
+            return
         url = url_match.group(0)
         if not re.search(r'(tiktok\.com|vm\.tiktok\.com)', url):
             return
@@ -124,7 +165,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 2. Система долгов (без восклицательного знака)
     lower_text = text.lower()
     if lower_text.startswith('должен'):
-        # Формат: должен @username сумма описание
         parts = text.split(maxsplit=3)
         if len(parts) < 3:
             return
@@ -139,7 +179,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         creditor_username = mention[1:]
         creditor_id = creditor_username
         creditor_name = creditor_username
-        # Попробуем найти user_id по username (если бот админ)
         try:
             member = await context.bot.get_chat_member(chat_id, mention)
             creditor_id = str(member.user.id)
@@ -151,7 +190,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if lower_text.startswith('вернул'):
-        # Формат: вернул @username сумма
         parts = text.split(maxsplit=2)
         if len(parts) < 2:
             return
@@ -184,11 +222,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 3. Скачивание TikTok (только если сообщение содержит ссылку)
     url_match = re.search(r'(https?://\S+)', text)
     if not url_match:
-        return  # ничего не делаем, не пишем "отправьте ссылку"
+        return
     url = url_match.group(0)
     if not re.search(r'(tiktok\.com|vm\.tiktok\.com)', url):
         return
-    # Если дошли сюда – скачиваем
     await update.message.reply_text("📥 Скачиваю...")
     files, content_type = download_tiktok(url)
     if not files:
@@ -201,7 +238,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_video(video=vid)
                 os.remove(f)
     elif content_type == 'photo':
-        # Отправляем все фото как альбом
         media_group = []
         for f in files:
             if os.path.exists(f):
