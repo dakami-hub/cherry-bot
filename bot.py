@@ -7,6 +7,7 @@ from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from db import init_db, add_debt, repay_debt, get_debts_for_user, save_chat_member, get_chat_members
 from keyboard import fix_keyboard
 
+# Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ def get_ffmpeg_path():
     return 'ffmpeg'
 
 def download_video(url: str) -> str | None:
-    """Скачивает видео в mp4 (до 50 МБ, 720p)."""
+    """Скачивает видео в mp4 (до 50 МБ, 720p). Поддерживает TikTok."""
     os.makedirs("downloads", exist_ok=True)
     opts = {
         'outtmpl': 'downloads/%(id)s.%(ext)s',
@@ -37,7 +38,6 @@ def download_video(url: str) -> str | None:
         'merge_output_format': 'mp4',
         'ffmpeg_location': get_ffmpeg_path(),
     }
-    # Добавляем куки, если есть
     if os.path.exists("cookies.txt"):
         opts['cookiefile'] = "cookies.txt"
     try:
@@ -49,7 +49,7 @@ def download_video(url: str) -> str | None:
         return None
 
 def download_audio(url: str) -> str | None:
-    """Скачивает аудио в mp3."""
+    """Скачивает аудио в mp3. Поддерживает TikTok."""
     os.makedirs("downloads", exist_ok=True)
     opts = {
         'outtmpl': 'downloads/%(id)s.%(ext)s',
@@ -86,20 +86,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.effective_user.username or ""
     chat_id = str(update.effective_chat.id)
 
+    # Сохраняем участника в базу (для @all)
     save_chat_member(chat_id, user_id, username, user_name)
 
     # ---------- !команды ----------
     if text == "!команды":
         help_text = (
             "📋 *Список команд:*\n\n"
-            "🎵 `!звук ссылка` – скачать аудио из TikTok, YouTube, VK\n"
-            "📥 `ссылка на TikTok/YouTube/VK` – скачать видео\n"
+            "🎵 `!звук ссылка` – скачать аудио из TikTok\n"
+            "📥 `ссылка на TikTok` – скачать видео\n"
             "💰 `!должен @username сумма описание` – записать долг (вы должны)\n"
             "💸 `!вернул @username сумма` – отметить возврат долга\n"
             "📊 `!долги` – показать ваши долги\n"
+            "📊 `!долги @username` – показать долги другого пользователя\n"
             "🔁 `!нз текст` – исправить сбившуюся раскладку\n"
             "👥 `@all` – упомянуть всех участников чата\n\n"
-            "ℹ️ Бот автоматически скачивает видео по ссылке."
+            "ℹ️ Бот автоматически скачивает видео по ссылке на TikTok."
         )
         await update.message.reply_text(help_text, parse_mode='Markdown')
         return
@@ -146,6 +148,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not url_match:
             return
         url = url_match.group(0)
+        if not re.search(r'(tiktok\.com|vm\.tiktok\.com)', url):
+            return
         await update.message.reply_text("🎵 Скачиваю аудио...")
         filepath = download_audio(url)
         if filepath and os.path.exists(filepath):
@@ -207,16 +211,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Не найден активный долг с такой суммой.")
         return
 
+    # Команда !долги [@username]
     if text.startswith('!долги'):
-        debts_str = get_debts_for_user(chat_id, user_id)
-        await update.message.reply_text(debts_str)
+        parts = text.split(maxsplit=1)
+        if len(parts) == 2 and parts[1].startswith('@'):
+            # !долги @username – смотрим долги другого пользователя
+            mention = parts[1]
+            target_username = mention[1:]
+            target_user_id = None
+            target_user_name = target_username
+            try:
+                member = await context.bot.get_chat_member(chat_id, mention)
+                target_user_id = str(member.user.id)
+                target_user_name = member.user.full_name
+            except:
+                pass
+            debts_str = get_debts_for_user(chat_id, target_user_id if target_user_id else target_username)
+            await update.message.reply_text(f"📋 Долги пользователя {target_user_name}:\n{debts_str}")
+        else:
+            # !долги – свои долги
+            debts_str = get_debts_for_user(chat_id, user_id)
+            await update.message.reply_text(debts_str)
         return
 
-    # ---------- Скачивание видео по ссылке ----------
+    # ---------- Скачивание видео по ссылке (только TikTok) ----------
     url_match = re.search(r'(https?://\S+)', text)
     if not url_match:
         return
     url = url_match.group(0)
+    if not re.search(r'(tiktok\.com|vm\.tiktok\.com)', url):
+        # Игнорируем другие ссылки (YouTube, VK и т.д.)
+        return
     await update.message.reply_text("📥 Скачиваю видео...")
     filepath = download_video(url)
     if filepath and os.path.exists(filepath):
@@ -224,7 +249,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_video(video=f)
         os.remove(filepath)
     else:
-        await update.message.reply_text("Не удалось скачать видео. Возможно, ссылка не поддерживается или требуется авторизация.")
+        await update.message.reply_text("Не удалось скачать видео. Проверьте ссылку.")
 
 # -------------------- Запуск --------------------
 def main():
