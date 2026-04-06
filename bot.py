@@ -1,13 +1,21 @@
 import os
 import re
 import logging
+import random
+import asyncio
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import yt_dlp
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
-from db import init_db, add_debt, repay_debt, get_debts_for_user, save_chat_member, get_chat_members
+from db import (
+    init_db, add_debt, repay_debt, get_debts_for_user,
+    save_chat_member, get_chat_members,
+    get_daily_victim, set_daily_victim, is_victim_chosen_today, get_all_chats_with_members
+)
 from keyboard import fix_keyboard
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -26,7 +34,6 @@ def get_ffmpeg_path():
     return 'ffmpeg'
 
 def download_video(url: str) -> str | None:
-    """Скачивает видео в mp4 (до 50 МБ, 720p). Поддерживает TikTok."""
     os.makedirs("downloads", exist_ok=True)
     opts = {
         'outtmpl': 'downloads/%(id)s.%(ext)s',
@@ -49,7 +56,6 @@ def download_video(url: str) -> str | None:
         return None
 
 def download_audio(url: str) -> str | None:
-    """Скачивает аудио в mp3. Поддерживает TikTok."""
     os.makedirs("downloads", exist_ok=True)
     opts = {
         'outtmpl': 'downloads/%(id)s.%(ext)s',
@@ -86,7 +92,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.effective_user.username or ""
     chat_id = str(update.effective_chat.id)
 
-    # Сохраняем участника в базу (для @all)
     save_chat_member(chat_id, user_id, username, user_name)
 
     # ---------- !команды ----------
@@ -160,7 +165,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Не удалось скачать аудио.")
         return
 
-    # ---------- Долги (с !) ----------
+    # ---------- Долги ----------
     if text.startswith('!должен'):
         parts = text.split(maxsplit=3)
         if len(parts) < 3:
@@ -211,11 +216,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Не найден активный долг с такой суммой.")
         return
 
-    # Команда !долги [@username]
     if text.startswith('!долги'):
         parts = text.split(maxsplit=1)
         if len(parts) == 2 and parts[1].startswith('@'):
-            # !долги @username – смотрим долги другого пользователя
             mention = parts[1]
             target_username = mention[1:]
             target_user_id = None
@@ -229,18 +232,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             debts_str = get_debts_for_user(chat_id, target_user_id if target_user_id else target_username)
             await update.message.reply_text(f"📋 Долги пользователя {target_user_name}:\n{debts_str}")
         else:
-            # !долги – свои долги
             debts_str = get_debts_for_user(chat_id, user_id)
             await update.message.reply_text(debts_str)
         return
 
-    # ---------- Скачивание видео по ссылке (только TikTok) ----------
+    # ---------- Скачивание видео по ссылке ----------
     url_match = re.search(r'(https?://\S+)', text)
     if not url_match:
         return
     url = url_match.group(0)
     if not re.search(r'(tiktok\.com|vm\.tiktok\.com)', url):
-        # Игнорируем другие ссылки (YouTube, VK и т.д.)
         return
     await update.message.reply_text("📥 Скачиваю видео...")
     filepath = download_video(url)
@@ -251,10 +252,54 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Не удалось скачать видео. Проверьте ссылку.")
 
+# -------------------- Ежедневный хуесос --------------------
+async def pick_daily_victim_for_chat(chat_id: str, context: ContextTypes.DEFAULT_TYPE):
+    members = get_chat_members(chat_id)
+    if not members:
+        logger.warning(f"No members in chat {chat_id}, cannot pick victim")
+        return
+    # Исключаем бота? Лучше исключить, но для простоты оставим всех.
+    victim = random.choice(members)
+    victim_id, victim_username, victim_name = victim
+    display_name = victim_username if victim_username else victim_name
+    set_daily_victim(chat_id, victim_id, display_name)
+    # Отправляем сообщение
+    if victim_username:
+        await context.bot.send_message(chat_id=chat_id, text=f"🍆 Сегодня хуесос — @{victim_username}")
+    else:
+        await context.bot.send_message(chat_id=chat_id, text=f"🍆 Сегодня хуесос — {display_name}")
+
+async def daily_victim_job(context: ContextTypes.DEFAULT_TYPE):
+    """Задача, запускаемая каждый день в 00:00 по Екатеринбургу."""
+    tz = ZoneInfo("Asia/Yekaterinburg")
+    now = datetime.now(tz)
+    today_str = now.date().isoformat()
+    chats = get_all_chats_with_members()
+    for chat_id in chats:
+        if not is_victim_chosen_today(chat_id):
+            await pick_daily_victim_for_chat(chat_id, context)
+
+async def run_initial_victim_selection(app: Application):
+    """При запуске бота для всех чатов, где сегодня ещё не выбран хуесос, выбираем и отправляем."""
+    chats = get_all_chats_with_members()
+    for chat_id in chats:
+        if not is_victim_chosen_today(chat_id):
+            await pick_daily_victim_for_chat(chat_id, app)
+
 # -------------------- Запуск --------------------
 def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Планировщик
+    scheduler = AsyncIOScheduler(timezone=ZoneInfo("Asia/Yekaterinburg"))
+    scheduler.add_job(daily_victim_job, 'cron', hour=0, minute=0, args=[app])
+    scheduler.start()
+
+    # Запускаем начальный выбор
+    loop = asyncio.get_event_loop()
+    loop.create_task(run_initial_victim_selection(app))
+
     logger.info("Bot started")
     app.run_polling(drop_pending_updates=True)
 
