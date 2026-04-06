@@ -94,6 +94,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     save_chat_member(chat_id, user_id, username, user_name)
 
+    # ---------- Случайный ответ (5% шанс) ----------
+    if random.random() < 0.05:
+        # Не отвечаем на команды и на свои сообщения
+        if not text.startswith('!') and update.effective_user.id != context.bot.id:
+            await update.message.reply_text("Завтра в 3")
+            return
+
     # ---------- !команды ----------
     if text == "!команды":
         help_text = (
