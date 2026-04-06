@@ -8,7 +8,6 @@ def init_db():
     os.makedirs("/app/data", exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # Таблица долгов
     c.execute('''
         CREATE TABLE IF NOT EXISTS debts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,7 +22,6 @@ def init_db():
             date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Таблица участников чатов
     c.execute('''
         CREATE TABLE IF NOT EXISTS chat_members (
             chat_id TEXT,
@@ -34,20 +32,20 @@ def init_db():
             PRIMARY KEY (chat_id, user_id)
         )
     ''')
-    # Таблица для ежедневного хуесоса
     c.execute('''
-        CREATE TABLE IF NOT EXISTS daily_victim (
+        CREATE TABLE IF NOT EXISTS daily_honors (
             chat_id TEXT,
-            victim_id TEXT,
-            victim_name TEXT,
+            role TEXT,
+            user_id TEXT,
+            user_name TEXT,
             chosen_date TEXT,
-            PRIMARY KEY (chat_id, chosen_date)
+            PRIMARY KEY (chat_id, role, chosen_date)
         )
     ''')
     conn.commit()
     conn.close()
 
-# ---------- Долги ----------
+# ---------- Долги (без изменений) ----------
 def add_debt(chat_id: str, creditor_id: str, creditor_name: str,
              debtor_id: str, debtor_name: str, amount: float, description: str) -> None:
     conn = sqlite3.connect(DB_PATH)
@@ -149,25 +147,35 @@ def get_all_chats_with_members():
     conn.close()
     return [row[0] for row in rows]
 
-# ---------- Ежедневный хуесос ----------
-def get_daily_victim(chat_id: str, target_date: str = None):
-    if target_date is None:
-        target_date = date.today().isoformat()
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT victim_id, victim_name FROM daily_victim WHERE chat_id = ? AND chosen_date = ?", (chat_id, target_date))
-    row = c.fetchone()
-    conn.close()
-    return row
-
-def set_daily_victim(chat_id: str, victim_id: str, victim_name: str):
+# ---------- Ежедневные почести ----------
+def set_daily_honor(chat_id: str, role: str, user_id: str, user_name: str):
     today = date.today().isoformat()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO daily_victim (chat_id, victim_id, victim_name, chosen_date) VALUES (?, ?, ?, ?)",
-              (chat_id, victim_id, victim_name, today))
+    c.execute('''
+        INSERT OR REPLACE INTO daily_honors (chat_id, role, user_id, user_name, chosen_date)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (chat_id, role, user_id, user_name, today))
     conn.commit()
     conn.close()
 
-def is_victim_chosen_today(chat_id: str) -> bool:
-    return get_daily_victim(chat_id) is not None
+def get_daily_honors(chat_id: str):
+    today = date.today().isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT role, user_id, user_name FROM daily_honors WHERE chat_id = ? AND chosen_date = ?", (chat_id, today))
+    rows = c.fetchall()
+    conn.close()
+    result = {}
+    for role, user_id, user_name in rows:
+        result[role] = (user_id, user_name)
+    return result
+
+def is_honors_chosen_today(chat_id: str) -> bool:
+    today = date.today().isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT 1 FROM daily_honors WHERE chat_id = ? AND chosen_date = ? LIMIT 1", (chat_id, today))
+    row = c.fetchone()
+    conn.close()
+    return row is not None
