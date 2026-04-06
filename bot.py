@@ -3,7 +3,7 @@ import re
 import logging
 import random
 import asyncio
-from datetime import datetime
+from datetime import datetime, date
 from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import yt_dlp
@@ -82,6 +82,44 @@ def download_audio(url: str) -> str | None:
         logger.error(f"Audio download error: {e}")
         return None
 
+# -------------------- Ежедневные почести --------------------
+async def pick_daily_honors_for_chat(chat_id: str, context: ContextTypes.DEFAULT_TYPE):
+    members = get_chat_members(chat_id)
+    if len(members) < 3:
+        logger.warning(f"Not enough members in chat {chat_id} to pick 3 distinct honors")
+        return
+    shuffled = members.copy()
+    random.shuffle(shuffled)
+    huesos = shuffled[0]
+    cherviviy = shuffled[1]
+    pleshiviy = shuffled[2]
+    roles = {
+        "huesos": huesos,
+        "cherviviy": cherviviy,
+        "pleshiviy": pleshiviy
+    }
+    for role, (uid, uname, fname) in roles.items():
+        display_name = uname if uname else fname
+        set_daily_honor(chat_id, role, uid, display_name)
+    msg = (
+        f"🍆 Сегодня хуесос — @{roles['huesos'][1] if roles['huesos'][1] else roles['huesos'][2]}\n"
+        f"🐛 Сегодня червивый — @{roles['cherviviy'][1] if roles['cherviviy'][1] else roles['cherviviy'][2]}\n"
+        f"🦲 Сегодня плешивый — @{roles['pleshiviy'][1] if roles['pleshiviy'][1] else roles['pleshiviy'][2]}"
+    )
+    await context.bot.send_message(chat_id=chat_id, text=msg)
+
+async def daily_honors_job(context: ContextTypes.DEFAULT_TYPE):
+    chats = get_all_chats_with_members()
+    for chat_id in chats:
+        if not is_honors_chosen_today(chat_id):
+            await pick_daily_honors_for_chat(chat_id, context)
+
+async def run_initial_honors_selection(app: Application):
+    chats = get_all_chats_with_members()
+    for chat_id in chats:
+        if not is_honors_chosen_today(chat_id):
+            await pick_daily_honors_for_chat(chat_id, app)
+
 # -------------------- Обработчик сообщений --------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
@@ -93,6 +131,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
 
     save_chat_member(chat_id, user_id, username, user_name)
+
+    # ---------- Проверка и обновление почестей, если новый день ----------
+    if not is_honors_chosen_today(chat_id):
+        # Выбираем почести для этого чата прямо сейчас
+        await pick_daily_honors_for_chat(chat_id, context)
 
     # ---------- Случайный ответ (5% шанс) ----------
     if random.random() < 0.05:
@@ -276,44 +319,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         os.remove(filepath)
     else:
         await update.message.reply_text("Не удалось скачать видео. Проверьте ссылку.")
-
-# -------------------- Ежедневные почести --------------------
-async def pick_daily_honors_for_chat(chat_id: str, context: ContextTypes.DEFAULT_TYPE):
-    members = get_chat_members(chat_id)
-    if len(members) < 3:
-        logger.warning(f"Not enough members in chat {chat_id} to pick 3 distinct honors")
-        return
-    shuffled = members.copy()
-    random.shuffle(shuffled)
-    huesos = shuffled[0]
-    cherviviy = shuffled[1]
-    pleshiviy = shuffled[2]
-    roles = {
-        "huesos": huesos,
-        "cherviviy": cherviviy,
-        "pleshiviy": pleshiviy
-    }
-    for role, (uid, uname, fname) in roles.items():
-        display_name = uname if uname else fname
-        set_daily_honor(chat_id, role, uid, display_name)
-    msg = (
-        f"🍆 Сегодня хуесос — @{roles['huesos'][1] if roles['huesos'][1] else roles['huesos'][2]}\n"
-        f"🐛 Сегодня червивый — @{roles['cherviviy'][1] if roles['cherviviy'][1] else roles['cherviviy'][2]}\n"
-        f"🦲 Сегодня плешивый — @{roles['pleshiviy'][1] if roles['pleshiviy'][1] else roles['pleshiviy'][2]}"
-    )
-    await context.bot.send_message(chat_id=chat_id, text=msg)
-
-async def daily_honors_job(context: ContextTypes.DEFAULT_TYPE):
-    chats = get_all_chats_with_members()
-    for chat_id in chats:
-        if not is_honors_chosen_today(chat_id):
-            await pick_daily_honors_for_chat(chat_id, context)
-
-async def run_initial_honors_selection(app: Application):
-    chats = get_all_chats_with_members()
-    for chat_id in chats:
-        if not is_honors_chosen_today(chat_id):
-            await pick_daily_honors_for_chat(chat_id, app)
 
 # -------------------- Запуск --------------------
 def main():
