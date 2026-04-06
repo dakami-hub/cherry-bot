@@ -134,7 +134,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ---------- Проверка и обновление почестей, если новый день ----------
     if not is_honors_chosen_today(chat_id):
-        # Выбираем почести для этого чата прямо сейчас
         await pick_daily_honors_for_chat(chat_id, context)
 
     # ---------- Случайный ответ (5% шанс) ----------
@@ -143,6 +142,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not text.startswith('!') and update.effective_user.id != context.bot.id:
             await update.message.reply_text("Завтра в 3")
             return
+
+    # ---------- Ответ на слово "когда" с шансом 50% ----------
+    if re.search(r'\bкогда\b', text, re.IGNORECASE):
+        if random.random() < 0.5:
+            if not text.startswith('!') and update.effective_user.id != context.bot.id:
+                await update.message.reply_text("Завтра в 3")
+                return
 
     # ---------- !команды ----------
     if text == "!команды":
