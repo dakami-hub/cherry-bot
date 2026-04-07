@@ -35,11 +35,10 @@ def init_db():
     c.execute('''
         CREATE TABLE IF NOT EXISTS daily_honors (
             chat_id TEXT,
-            role TEXT,
             user_id TEXT,
-            user_name TEXT,
+            role TEXT,
             chosen_date TEXT,
-            PRIMARY KEY (chat_id, role, chosen_date)
+            PRIMARY KEY (chat_id, user_id, chosen_date)
         )
     ''')
     conn.commit()
@@ -147,15 +146,15 @@ def get_all_chats_with_members():
     conn.close()
     return [row[0] for row in rows]
 
-# ---------- Ежедневные почести ----------
-def set_daily_honor(chat_id: str, role: str, user_id: str, user_name: str):
+# ---------- Ежедневные почести (новая логика) ----------
+def set_daily_honor(chat_id: str, user_id: str, role: str):
     today = date.today().isoformat()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''
-        INSERT OR REPLACE INTO daily_honors (chat_id, role, user_id, user_name, chosen_date)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (chat_id, role, user_id, user_name, today))
+        INSERT OR REPLACE INTO daily_honors (chat_id, user_id, role, chosen_date)
+        VALUES (?, ?, ?, ?)
+    ''', (chat_id, user_id, role, today))
     conn.commit()
     conn.close()
 
@@ -163,13 +162,13 @@ def get_daily_honors(chat_id: str):
     today = date.today().isoformat()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT role, user_id, user_name FROM daily_honors WHERE chat_id = ? AND chosen_date = ?", (chat_id, today))
+    c.execute('''
+        SELECT user_id, role FROM daily_honors
+        WHERE chat_id = ? AND chosen_date = ?
+    ''', (chat_id, today))
     rows = c.fetchall()
     conn.close()
-    result = {}
-    for role, user_id, user_name in rows:
-        result[role] = (user_id, user_name)
-    return result
+    return {user_id: role for user_id, role in rows}
 
 def is_honors_chosen_today(chat_id: str) -> bool:
     today = date.today().isoformat()
