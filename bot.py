@@ -83,6 +83,22 @@ def download_audio(url: str) -> str | None:
         logger.error(f"Audio download error: {e}")
         return None
 
+# -------------------- Обновление участников чатов --------------------
+async def update_all_chat_members(app: Application):
+    """Обновляет список участников для всех чатов, где бот администратор."""
+    chats = get_all_chats_with_members()
+    for chat_id in chats:
+        try:
+            members = []
+            async for member in app.bot.get_chat_members(chat_id):
+                if not member.user.is_bot:
+                    members.append(member.user)
+            for user in members:
+                save_chat_member(chat_id, str(user.id), user.username or "", user.full_name or "")
+            logger.info(f"Updated members for chat {chat_id}: {len(members)} users")
+        except Exception as e:
+            logger.warning(f"Cannot get members for chat {chat_id}: {e} (bot may not be admin)")
+
 # -------------------- Ежедневные почести --------------------
 HONOR_ROLES = ["huesos", "cherviviy", "pleshiviy", "smradniy"]
 HONOR_EMOJI = {
@@ -370,11 +386,14 @@ def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
+    # Обновляем участников чатов при старте (если бот админ)
+    loop = asyncio.get_event_loop()
+    loop.create_task(update_all_chat_members(app))
+
     scheduler = AsyncIOScheduler(timezone=ZoneInfo("Asia/Yekaterinburg"))
     scheduler.add_job(daily_honors_job, 'cron', hour=0, minute=0, args=[app])
     scheduler.start()
 
-    loop = asyncio.get_event_loop()
     loop.create_task(run_initial_honors_selection(app))
 
     logger.info("Bot started")
