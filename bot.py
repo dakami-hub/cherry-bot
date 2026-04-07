@@ -85,18 +85,18 @@ def download_audio(url: str) -> str | None:
 # -------------------- Ежедневные почести --------------------
 async def pick_daily_honors_for_chat(chat_id: str, context: ContextTypes.DEFAULT_TYPE):
     members = get_chat_members(chat_id)
-    if len(members) < 3:
-        logger.warning(f"Not enough members in chat {chat_id} to pick 3 distinct honors")
+    if len(members) < 4:
+        msg = f"⚠️ В чате недостаточно участников для выбора 4 разных почестей (нужно минимум 4). Сейчас в базе {len(members)} человек. Новые участники добавятся, когда напишут сообщение."
+        await context.bot.send_message(chat_id=chat_id, text=msg)
+        logger.warning(f"Not enough members in chat {chat_id}: {len(members)} < 4")
         return
     shuffled = members.copy()
     random.shuffle(shuffled)
-    huesos = shuffled[0]
-    cherviviy = shuffled[1]
-    pleshiviy = shuffled[2]
     roles = {
-        "huesos": huesos,
-        "cherviviy": cherviviy,
-        "pleshiviy": pleshiviy
+        "huesos": shuffled[0],
+        "cherviviy": shuffled[1],
+        "pleshiviy": shuffled[2],
+        "smradniy": shuffled[3]
     }
     for role, (uid, uname, fname) in roles.items():
         display_name = uname if uname else fname
@@ -104,7 +104,8 @@ async def pick_daily_honors_for_chat(chat_id: str, context: ContextTypes.DEFAULT
     msg = (
         f"🍆 Сегодня хуесос — @{roles['huesos'][1] if roles['huesos'][1] else roles['huesos'][2]}\n"
         f"🐛 Сегодня червивый — @{roles['cherviviy'][1] if roles['cherviviy'][1] else roles['cherviviy'][2]}\n"
-        f"🦲 Сегодня плешивый — @{roles['pleshiviy'][1] if roles['pleshiviy'][1] else roles['pleshiviy'][2]}"
+        f"🦲 Сегодня плешивый — @{roles['pleshiviy'][1] if roles['pleshiviy'][1] else roles['pleshiviy'][2]}\n"
+        f"💨 Сегодня смрадный — @{roles['smradniy'][1] if roles['smradniy'][1] else roles['smradniy'][2]}"
     )
     await context.bot.send_message(chat_id=chat_id, text=msg)
 
@@ -138,7 +139,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ---------- Случайный ответ (5% шанс) ----------
     if random.random() < 0.05:
-        # Не отвечаем на команды и на свои сообщения
         if not text.startswith('!') and update.effective_user.id != context.bot.id:
             await update.message.reply_text("Завтра в 3")
             return
@@ -162,7 +162,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📊 `!долги @username` – показать долги другого пользователя\n"
             "🔁 `!нз текст` – исправить сбившуюся раскладку\n"
             "👥 `@all` – упомянуть всех участников чата\n"
-            "🏆 `!почести` – показать сегодняшних хуесоса, червивого и плешивого\n\n"
+            "🏆 `!почести` – показать сегодняшних хуесоса, червивого, плешивого и смрадного\n\n"
             "ℹ️ Бот автоматически скачивает видео по ссылке на TikTok."
         )
         await update.message.reply_text(help_text, parse_mode='Markdown')
@@ -177,10 +177,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             huesos_name = honors.get('huesos', ('', '?'))[1]
             cherviviy_name = honors.get('cherviviy', ('', '?'))[1]
             pleshiviy_name = honors.get('pleshiviy', ('', '?'))[1]
+            smradniy_name = honors.get('smradniy', ('', '?'))[1]
             msg = (
                 f"🍆 Хуесос: @{huesos_name}\n"
                 f"🐛 Червивый: @{cherviviy_name}\n"
-                f"🦲 Плешивый: @{pleshiviy_name}"
+                f"🦲 Плешивый: @{pleshiviy_name}\n"
+                f"💨 Смрадный: @{smradniy_name}"
             )
             await update.message.reply_text(msg)
         return
