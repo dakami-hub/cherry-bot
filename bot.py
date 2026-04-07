@@ -83,31 +83,43 @@ def download_audio(url: str) -> str | None:
         return None
 
 # -------------------- Ежедневные почести --------------------
+HONOR_ROLES = ["huesos", "cherviviy", "pleshiviy", "smradniy"]
+HONOR_EMOJI = {
+    "huesos": "🍆",
+    "cherviviy": "🐛",
+    "pleshiviy": "🦲",
+    "smradniy": "💨"
+}
+HONOR_NAMES = {
+    "huesos": "хуесос",
+    "cherviviy": "червивый",
+    "pleshiviy": "плешивый",
+    "smradniy": "смрадный"
+}
+
 async def pick_daily_honors_for_chat(chat_id: str, context: ContextTypes.DEFAULT_TYPE):
     members = get_chat_members(chat_id)
-    if len(members) < 4:
-        msg = f"⚠️ В чате недостаточно участников для выбора 4 разных почестей (нужно минимум 4). Сейчас в базе {len(members)} человек. Новые участники добавятся, когда напишут сообщение."
-        await context.bot.send_message(chat_id=chat_id, text=msg)
-        logger.warning(f"Not enough members in chat {chat_id}: {len(members)} < 4")
+    if not members:
+        logger.warning(f"No members in chat {chat_id}, cannot pick honors")
         return
-    shuffled = members.copy()
-    random.shuffle(shuffled)
-    roles = {
-        "huesos": shuffled[0],
-        "cherviviy": shuffled[1],
-        "pleshiviy": shuffled[2],
-        "smradniy": shuffled[3]
-    }
-    for role, (uid, uname, fname) in roles.items():
-        display_name = uname if uname else fname
-        set_daily_honor(chat_id, role, uid, display_name)
-    msg = (
-        f"🍆 Сегодня хуесос — @{roles['huesos'][1] if roles['huesos'][1] else roles['huesos'][2]}\n"
-        f"🐛 Сегодня червивый — @{roles['cherviviy'][1] if roles['cherviviy'][1] else roles['cherviviy'][2]}\n"
-        f"🦲 Сегодня плешивый — @{roles['pleshiviy'][1] if roles['pleshiviy'][1] else roles['pleshiviy'][2]}\n"
-        f"💨 Сегодня смрадный — @{roles['smradniy'][1] if roles['smradniy'][1] else roles['smradniy'][2]}"
-    )
-    await context.bot.send_message(chat_id=chat_id, text=msg)
+    # Для каждого участника выбираем случайную роль
+    for user_id, username, full_name in members:
+        role = random.choice(HONOR_ROLES)
+        set_daily_honor(chat_id, user_id, role)
+    # Формируем сообщение
+    msg_lines = []
+    for user_id, username, full_name in members:
+        role = get_daily_honors(chat_id).get(user_id)
+        if role:
+            display_name = username if username else full_name
+            emoji = HONOR_EMOJI.get(role, "❓")
+            name_ru = HONOR_NAMES.get(role, role)
+            msg_lines.append(f"{emoji} {display_name} — {name_ru}")
+    if msg_lines:
+        msg = "🍆🐛🦲💨 *Сегодняшние почести:*\n" + "\n".join(msg_lines)
+        await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='Markdown')
+    else:
+        await context.bot.send_message(chat_id=chat_id, text="Не удалось определить почести.")
 
 async def daily_honors_job(context: ContextTypes.DEFAULT_TYPE):
     chats = get_all_chats_with_members()
@@ -162,7 +174,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📊 `!долги @username` – показать долги другого пользователя\n"
             "🔁 `!нз текст` – исправить сбившуюся раскладку\n"
             "👥 `@all` – упомянуть всех участников чата\n"
-            "🏆 `!почести` – показать сегодняшних хуесоса, червивого, плешивого и смрадного\n\n"
+            "🏆 `!почести` – показать сегодняшние почести для всех участников\n\n"
             "ℹ️ Бот автоматически скачивает видео по ссылке на TikTok."
         )
         await update.message.reply_text(help_text, parse_mode='Markdown')
@@ -174,17 +186,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not honors:
             await update.message.reply_text("Сегодня ещё никто не выбран. Подождите до полуночи или перезапустите бота.")
         else:
-            huesos_name = honors.get('huesos', ('', '?'))[1]
-            cherviviy_name = honors.get('cherviviy', ('', '?'))[1]
-            pleshiviy_name = honors.get('pleshiviy', ('', '?'))[1]
-            smradniy_name = honors.get('smradniy', ('', '?'))[1]
-            msg = (
-                f"🍆 Хуесос: @{huesos_name}\n"
-                f"🐛 Червивый: @{cherviviy_name}\n"
-                f"🦲 Плешивый: @{pleshiviy_name}\n"
-                f"💨 Смрадный: @{smradniy_name}"
-            )
-            await update.message.reply_text(msg)
+            members = get_chat_members(chat_id)
+            msg_lines = []
+            for uid, uname, fname in members:
+                role = honors.get(uid)
+                if role:
+                    display_name = uname if uname else fname
+                    emoji = HONOR_EMOJI.get(role, "❓")
+                    name_ru = HONOR_NAMES.get(role, role)
+                    msg_lines.append(f"{emoji} {display_name} — {name_ru}")
+            if msg_lines:
+                msg = "🍆🐛🦲💨 *Текущие почести:*\n" + "\n".join(msg_lines)
+                await update.message.reply_text(msg, parse_mode='Markdown')
+            else:
+                await update.message.reply_text("Не удалось определить почести.")
         return
 
     # ---------- !нз ----------
