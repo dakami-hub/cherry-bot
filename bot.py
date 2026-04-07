@@ -116,8 +116,8 @@ async def pick_daily_honors_for_chat(chat_id: str, context: ContextTypes.DEFAULT
             name_ru = HONOR_NAMES.get(role, role)
             msg_lines.append(f"{emoji} {display_name} — {name_ru}")
     if msg_lines:
-        msg = "🍆🐛🦲💨 *Сегодняшние почести:*\n" + "\n".join(msg_lines)
-        await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='Markdown')
+        msg = "🍆🐛🦲💨 Сегодняшние почести:\n" + "\n".join(msg_lines)
+        await context.bot.send_message(chat_id=chat_id, text=msg)
     else:
         await context.bot.send_message(chat_id=chat_id, text="Не удалось определить почести.")
 
@@ -196,8 +196,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     name_ru = HONOR_NAMES.get(role, role)
                     msg_lines.append(f"{emoji} {display_name} — {name_ru}")
             if msg_lines:
-                msg = "🍆🐛🦲💨 *Текущие почести:*\n" + "\n".join(msg_lines)
-                await update.message.reply_text(msg, parse_mode='Markdown')
+                msg = "🍆🐛🦲💨 Текущие почести:\n" + "\n".join(msg_lines)
+                await update.message.reply_text(msg)
             else:
                 await update.message.reply_text("Не удалось определить почести.")
         return
