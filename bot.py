@@ -3,6 +3,7 @@ import re
 import logging
 import random
 import asyncio
+import sqlite3
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -12,7 +13,7 @@ from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from db import (
     init_db, add_debt, repay_debt, get_debts_for_user,
     save_chat_member, get_chat_members,
-    set_daily_honor, get_daily_honors, is_honors_chosen_today, get_all_chats_with_members
+    set_daily_honor, get_daily_honors, is_honors_chosen_today, get_all_chats_with_members, DB_PATH
 )
 from keyboard import fix_keyboard
 
@@ -102,19 +103,29 @@ async def pick_daily_honors_for_chat(chat_id: str, context: ContextTypes.DEFAULT
     if not members:
         logger.warning(f"No members in chat {chat_id}, cannot pick honors")
         return
-    # Для каждого участника выбираем случайную роль
+    # Очищаем старые записи за сегодня
+    today = date.today().isoformat()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM daily_honors WHERE chat_id = ? AND chosen_date = ?", (chat_id, today))
+    conn.commit()
+    conn.close()
+    # Назначаем новые роли
     for user_id, username, full_name in members:
         role = random.choice(HONOR_ROLES)
         set_daily_honor(chat_id, user_id, role)
-    # Формируем сообщение
+    # Формируем сообщение с @username
     msg_lines = []
     for user_id, username, full_name in members:
         role = get_daily_honors(chat_id).get(user_id)
         if role:
-            display_name = username if username else full_name
+            if username:
+                mention = f"@{username}"
+            else:
+                mention = full_name
             emoji = HONOR_EMOJI.get(role, "❓")
             name_ru = HONOR_NAMES.get(role, role)
-            msg_lines.append(f"{emoji} {display_name} — {name_ru}")
+            msg_lines.append(f"{emoji} {mention} — {name_ru}")
     if msg_lines:
         msg = "🍆🐛🦲💨 Сегодняшние почести:\n" + "\n".join(msg_lines)
         await context.bot.send_message(chat_id=chat_id, text=msg)
@@ -130,8 +141,16 @@ async def daily_honors_job(context: ContextTypes.DEFAULT_TYPE):
 async def run_initial_honors_selection(app: Application):
     chats = get_all_chats_with_members()
     for chat_id in chats:
-        if not is_honors_chosen_today(chat_id):
+        members = get_chat_members(chat_id)
+        honors = get_daily_honors(chat_id)
+        # Если нет записей за сегодня или количество не совпадает, пересоздаём
+        if not honors or len(honors) != len(members):
             await pick_daily_honors_for_chat(chat_id, app)
+        else:
+            # Проверяем, что все участники имеют роль
+            all_have = all(uid in honors for uid, _, _ in members)
+            if not all_have:
+                await pick_daily_honors_for_chat(chat_id, app)
 
 # -------------------- Обработчик сообщений --------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -191,10 +210,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for uid, uname, fname in members:
                 role = honors.get(uid)
                 if role:
-                    display_name = uname if uname else fname
+                    if uname:
+                        mention = f"@{uname}"
+                    else:
+                        mention = fname
                     emoji = HONOR_EMOJI.get(role, "❓")
                     name_ru = HONOR_NAMES.get(role, role)
-                    msg_lines.append(f"{emoji} {display_name} — {name_ru}")
+                    msg_lines.append(f"{emoji} {mention} — {name_ru}")
             if msg_lines:
                 msg = "🍆🐛🦲💨 Текущие почести:\n" + "\n".join(msg_lines)
                 await update.message.reply_text(msg)
