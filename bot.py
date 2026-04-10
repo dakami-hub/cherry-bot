@@ -4,7 +4,7 @@ import logging
 import random
 import asyncio
 import sqlite3
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import yt_dlp
@@ -25,6 +25,39 @@ if not TOKEN:
     raise ValueError("No TELEGRAM_TOKEN in environment")
 
 init_db()
+
+# -------------------- Антифлуд --------------------
+# Структура: flood_tracker[chat_id][user_id] = [last_timestamp, count]
+flood_tracker = {}
+
+def check_flood(chat_id: str, user_id: str, current_time: datetime) -> bool:
+    """Возвращает True, если нужно наказать, и обновляет счётчик."""
+    now = current_time
+    if chat_id not in flood_tracker:
+        flood_tracker[chat_id] = {}
+    user_data = flood_tracker[chat_id].get(user_id)
+    if user_data is None:
+        flood_tracker[chat_id][user_id] = [now, 1]
+        return False
+    last_time, count = user_data
+    if (now - last_time).total_seconds() < 30:
+        # Новое сообщение в пределах 30 секунд
+        if count + 1 >= 5:
+            # Наказание
+            flood_tracker[chat_id][user_id] = [now, 0]  # сброс
+            return True
+        else:
+            flood_tracker[chat_id][user_id] = [now, count + 1]
+            return False
+    else:
+        # Прошло больше 30 секунд, сбрасываем счётчик
+        flood_tracker[chat_id][user_id] = [now, 1]
+        return False
+
+def reset_flood_for_chat(chat_id: str):
+    """Сбросить счётчики для всех пользователей чата (при появлении чужого сообщения)."""
+    if chat_id in flood_tracker:
+        flood_tracker[chat_id] = {}
 
 # -------------------- yt-dlp download --------------------
 def get_ffmpeg_path():
@@ -119,18 +152,15 @@ async def pick_daily_honors_for_chat(chat_id: str, context: ContextTypes.DEFAULT
     if not members:
         logger.warning(f"No members in chat {chat_id}, cannot pick honors")
         return
-    # Очищаем старые записи за сегодня
     today = date.today().isoformat()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("DELETE FROM daily_honors WHERE chat_id = ? AND chosen_date = ?", (chat_id, today))
     conn.commit()
     conn.close()
-    # Назначаем новые роли
     for user_id, username, full_name in members:
         role = random.choice(HONOR_ROLES)
         set_daily_honor(chat_id, user_id, role)
-    # Формируем сообщение с @username
     msg_lines = []
     for user_id, username, full_name in members:
         role = get_daily_honors(chat_id).get(user_id)
@@ -159,11 +189,9 @@ async def run_initial_honors_selection(app: Application):
     for chat_id in chats:
         members = get_chat_members(chat_id)
         honors = get_daily_honors(chat_id)
-        # Если нет записей за сегодня или количество не совпадает, пересоздаём
         if not honors or len(honors) != len(members):
             await pick_daily_honors_for_chat(chat_id, app)
         else:
-            # Проверяем, что все участники имеют роль
             all_have = all(uid in honors for uid, _, _ in members)
             if not all_have:
                 await pick_daily_honors_for_chat(chat_id, app)
@@ -177,8 +205,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.effective_user.full_name or user_id
     username = update.effective_user.username or ""
     chat_id = str(update.effective_chat.id)
+    current_time = datetime.now()
 
+    # Сохраняем участника в базу
     save_chat_member(chat_id, user_id, username, user_name)
+
+    # ---------- Антифлуд ----------
+    # Игнорируем сообщения от бота
+    if update.effective_user.id != context.bot.id:
+        # Если сообщение от другого пользователя (не текущего), сбрасываем флуд для всех в чате
+        # Для простоты: сбрасываем счётчики при любом сообщении отличном от текущего?
+        # Но лучше: при любом сообщении от любого пользователя сбрасываем счётчик для текущего пользователя?
+        # Реализуем так: если сообщение от того же пользователя, проверяем флуд.
+        # Если от другого – сбрасываем счётчик для того, кто писал (чтобы не наказывать его за чужие сообщения).
+        # Для простоты и справедливости: при любом сообщении сбрасываем счётчик для всех? Нет, это неправильно.
+        # Сделаем: если сообщение от другого пользователя, сбрасываем счётчик для ВСЕХ в этом чате (поскольку чат активен).
+        # Это наиболее логично: как только кто-то другой ответил, флуд сбрасывается.
+        # Определим, есть ли в чате другие пользователи, писавшие недавно? Упростим:
+        # При каждом сообщении, если user_id не равен предыдущему отправителю, сбрасываем счётчики для всех.
+        # Для этого нужно знать предыдущего отправителя. Храним last_sender_id в flood_tracker[chat_id].
+        # Но проще: при любом сообщении сбрасываем счётчики для ВСЕХ пользователей чата.
+        # Это гарантирует, что флуд считается только если подряд идёт один и тот же человек.
+        # Реализуем:
+        if chat_id not in flood_tracker:
+            flood_tracker[chat_id] = {}
+        # Если в этом чате есть записи и последнее сообщение было от другого пользователя, сбросить все счётчики.
+        # Для этого храним last_sender в flood_tracker[chat_id]['last_sender'].
+        if 'last_sender' in flood_tracker[chat_id] and flood_tracker[chat_id]['last_sender'] != user_id:
+            # Сброс всех счётчиков в чате
+            flood_tracker[chat_id] = {}
+        # Обновляем last_sender
+        flood_tracker[chat_id]['last_sender'] = user_id
+
+        # Проверяем флуд для текущего пользователя
+        if check_flood(chat_id, user_id, current_time):
+            # Отправляем наказание
+            mention = f"@{username}" if username else user_name
+            await update.message.reply_text(f"{mention}, ты разговариваешь сам с собой, ебанат")
+            return  # Прерываем обработку, чтобы не выполнять другие команды
 
     # ---------- Проверка и обновление почестей, если новый день ----------
     if not is_honors_chosen_today(chat_id):
@@ -386,7 +450,6 @@ def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Обновляем участников чатов при старте (если бот админ)
     loop = asyncio.get_event_loop()
     loop.create_task(update_all_chat_members(app))
 
