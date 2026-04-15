@@ -8,7 +8,6 @@ def init_db():
     os.makedirs("/app/data", exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # Таблица долгов
     c.execute('''
         CREATE TABLE IF NOT EXISTS debts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24,7 +23,6 @@ def init_db():
             date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    # Таблица возвратов
     c.execute('''
         CREATE TABLE IF NOT EXISTS repayments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,7 +33,6 @@ def init_db():
             FOREIGN KEY(debt_id) REFERENCES debts(id)
         )
     ''')
-    # Таблица участников чатов
     c.execute('''
         CREATE TABLE IF NOT EXISTS chat_members (
             chat_id TEXT,
@@ -46,7 +43,6 @@ def init_db():
             PRIMARY KEY (chat_id, user_id)
         )
     ''')
-    # Таблица ежедневных почестей
     c.execute('''
         CREATE TABLE IF NOT EXISTS daily_honors (
             chat_id TEXT,
@@ -56,6 +52,21 @@ def init_db():
             PRIMARY KEY (chat_id, user_id, chosen_date)
         )
     ''')
+    conn.commit()
+    conn.close()
+    # Миграция: добавляем колонку original_amount, если её нет
+    migrate_db()
+
+def migrate_db():
+    """Добавляет недостающие колонки в существующие таблицы."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("PRAGMA table_info(debts)")
+    columns = [col[1] for col in c.fetchall()]
+    if "original_amount" not in columns:
+        c.execute("ALTER TABLE debts ADD COLUMN original_amount REAL DEFAULT 0")
+    # Обновляем original_amount для существующих записей, если они есть
+    c.execute("UPDATE debts SET original_amount = amount WHERE original_amount IS NULL")
     conn.commit()
     conn.close()
 
@@ -72,10 +83,8 @@ def add_debt(chat_id: str, creditor_id: str, creditor_name: str,
     conn.close()
 
 def repay_debt(chat_id: str, creditor_id: str, debtor_id: str, amount: float, description: str) -> bool:
-    """Возвращает True, если списание прошло успешно."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    # Находим самый старый непогашенный долг, где должник = debtor_id, кредитор = creditor_id
     c.execute('''
         SELECT id, amount FROM debts
         WHERE chat_id = ? AND creditor_id = ? AND debtor_id = ? AND repaid = 0
@@ -87,17 +96,13 @@ def repay_debt(chat_id: str, creditor_id: str, debtor_id: str, amount: float, de
         conn.close()
         return False
     debt_id, current_amount = row
-    # Создаём запись о возврате
     c.execute('''
         INSERT INTO repayments (debt_id, amount, description)
         VALUES (?, ?, ?)
     ''', (debt_id, amount, description))
-    # Обновляем остаток долга
     if amount >= current_amount:
-        # Полное погашение
         c.execute('UPDATE debts SET repaid = 1, amount = 0 WHERE id = ?', (debt_id,))
     else:
-        # Частичное
         new_amount = current_amount - amount
         c.execute('UPDATE debts SET amount = ? WHERE id = ?', (new_amount, debt_id))
     conn.commit()
@@ -105,21 +110,15 @@ def repay_debt(chat_id: str, creditor_id: str, debtor_id: str, amount: float, de
     return True
 
 def get_debts_for_user(chat_id: str, user_id: str, mode: str = "self") -> dict:
-    """
-    mode = "self" – возвращает словарь с ключами "i_owe" (я должен) и "owe_me" (мне должны).
-    mode = "user" – возвращает список долгов указанного пользователя (где он должник).
-    """
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     if mode == "self":
-        # Долги, где я должник (я должен кому-то)
         c.execute('''
             SELECT creditor_name, amount, description FROM debts
             WHERE chat_id = ? AND debtor_id = ? AND repaid = 0
             ORDER BY date ASC
         ''', (chat_id, user_id))
         i_owe = c.fetchall()
-        # Долги, где я кредитор (мне должны)
         c.execute('''
             SELECT debtor_name, amount, description FROM debts
             WHERE chat_id = ? AND creditor_id = ? AND repaid = 0
@@ -129,7 +128,6 @@ def get_debts_for_user(chat_id: str, user_id: str, mode: str = "self") -> dict:
         conn.close()
         return {"i_owe": i_owe, "owe_me": owe_me}
     else:
-        # Долги, где указанный пользователь – должник
         c.execute('''
             SELECT creditor_name, amount, description FROM debts
             WHERE chat_id = ? AND debtor_id = ? AND repaid = 0
@@ -139,7 +137,7 @@ def get_debts_for_user(chat_id: str, user_id: str, mode: str = "self") -> dict:
         conn.close()
         return {"debts": debts}
 
-# ---------- Участники чатов (без изменений) ----------
+# ---------- Участники чатов ----------
 def save_chat_member(chat_id: str, user_id: str, username: str, full_name: str):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -169,7 +167,7 @@ def get_all_chats_with_members():
     conn.close()
     return [row[0] for row in rows]
 
-# ---------- Ежедневные почести (без изменений) ----------
+# ---------- Ежедневные почести ----------
 def set_daily_honor(chat_id: str, user_id: str, role: str):
     today = date.today().isoformat()
     conn = sqlite3.connect(DB_PATH)
