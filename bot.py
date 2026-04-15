@@ -114,7 +114,6 @@ HONOR_NAMES = {
 }
 
 async def assign_missing_roles(chat_id: str, context: ContextTypes.DEFAULT_TYPE):
-    """Назначает роли участникам, у которых их ещё нет за сегодня."""
     members = get_chat_members(chat_id)
     honors = get_daily_honors(chat_id)
     changed = False
@@ -124,7 +123,6 @@ async def assign_missing_roles(chat_id: str, context: ContextTypes.DEFAULT_TYPE)
             set_daily_honor(chat_id, user_id, role)
             changed = True
     if changed:
-        # Переотправляем сообщение с почестями (обновлённое)
         await send_honors_message(chat_id, context)
 
 async def send_honors_message(chat_id: str, context: ContextTypes.DEFAULT_TYPE):
@@ -145,9 +143,7 @@ async def send_honors_message(chat_id: str, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=chat_id, text="Не удалось определить почести.")
 
 async def pick_daily_honors_for_chat(chat_id: str, context: ContextTypes.DEFAULT_TYPE):
-    """Создаёт почести для всех участников (если ещё нет за сегодня)."""
     if is_honors_chosen_today(chat_id):
-        # Уже есть записи за сегодня – просто добавим недостающие роли
         await assign_missing_roles(chat_id, context)
         return
     members = get_chat_members(chat_id)
@@ -176,7 +172,6 @@ async def run_initial_honors_selection(app: Application):
         await pick_daily_honors_for_chat(chat_id, app)
 
 async def track_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает добавление нового участника в чат."""
     result = update.chat_member
     if not result:
         return
@@ -185,9 +180,7 @@ async def track_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = result.new_chat_member.user
         if user.is_bot:
             return
-        # Сохраняем участника в базу
         save_chat_member(chat_id, str(user.id), user.username or "", user.full_name or "")
-        # Если сегодня уже есть почести, назначаем новому участнику случайную роль
         if is_honors_chosen_today(chat_id):
             honors = get_daily_honors(chat_id)
             if str(user.id) not in honors:
@@ -207,20 +200,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     save_chat_member(chat_id, user_id, username, user_name)
 
-    # ---------- Проверка и обновление почестей (без перезаписи) ----------
+    # Почести (если новый день или недостаёт ролей)
     if not is_honors_chosen_today(chat_id):
         await pick_daily_honors_for_chat(chat_id, context)
     else:
-        # Если уже есть, но возможно не все участники имеют роли (например, новые)
         await assign_missing_roles(chat_id, context)
 
-    # ---------- Случайный ответ (1% шанс) ----------
+    # Случайный ответ (1% шанс)
     if random.random() < 0.01:
         if not text.startswith('!') and update.effective_user.id != context.bot.id:
             await update.message.reply_text("Завтра в 3")
             return
 
-    # ---------- Ответ на слово "когда" с шансом 50% ----------
+    # Ответ на слово "когда" (50% шанс)
     if re.search(r'\bкогда\b', text, re.IGNORECASE):
         if random.random() < 0.5:
             if not text.startswith('!') and update.effective_user.id != context.bot.id:
@@ -234,9 +226,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🎵 `!звук ссылка` – скачать аудио из TikTok\n"
             "📥 `ссылка на TikTok` – скачать видео\n"
             "💰 `!должен @username сумма описание` – записать долг (вы должны)\n"
-            "💸 `!вернул @username сумма` – отметить возврат долга\n"
-            "📊 `!долги` – показать ваши долги\n"
-            "📊 `!долги @username` – показать долги другого пользователя\n"
+            "💸 `!вернул @username сумма [описание]` – отметить возврат долга\n"
+            "📊 `!долги` – показать ваши долги (кому должны и кто вам)\n"
+            "📊 `!долги @username` – показать долги указанного пользователя (кому он должен)\n"
             "🔁 `!нз текст` – исправить сбившуюся раскладку\n"
             "👥 `@all` – упомянуть всех участников чата\n"
             "🏆 `!почести` – показать сегодняшние почести для всех участников\n\n"
@@ -321,7 +313,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Не удалось скачать аудио.")
         return
 
-    # ---------- Долги ----------
+    # ---------- Долги (новые команды) ----------
     if text.startswith('!должен'):
         parts = text.split(maxsplit=3)
         if len(parts) < 3:
@@ -348,8 +340,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if text.startswith('!вернул'):
-        parts = text.split(maxsplit=2)
-        if len(parts) < 2:
+        parts = text.split(maxsplit=3)
+        if len(parts) < 3:
             return
         mention = parts[1]
         if not mention.startswith('@'):
@@ -358,6 +350,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             amount = float(parts[2])
         except:
             return
+        description = parts[3] if len(parts) > 3 else "Без описания"
         creditor_username = mention[1:]
         creditor_id = creditor_username
         try:
@@ -365,16 +358,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             creditor_id = str(member.user.id)
         except:
             pass
-        success = repay_debt(chat_id, creditor_id, user_id, amount)
+        success = repay_debt(chat_id, creditor_id, user_id, amount, description)
         if success:
-            await update.message.reply_text(f"✅ Отметил возврат {amount} руб.")
+            await update.message.reply_text(f"✅ Отметил возврат {amount} руб. для {creditor_username} ({description})")
         else:
-            await update.message.reply_text("❌ Не найден активный долг с такой суммой.")
+            await update.message.reply_text("❌ Не найден активный долг с такой суммой или вы не должны этому пользователю.")
         return
 
     if text.startswith('!долги'):
         parts = text.split(maxsplit=1)
         if len(parts) == 2 and parts[1].startswith('@'):
+            # !долги @username – долги указанного пользователя (где он должник)
             mention = parts[1]
             target_username = mention[1:]
             target_user_id = None
@@ -385,14 +379,46 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 target_user_name = member.user.full_name
             except:
                 pass
-            debts_str = get_debts_for_user(chat_id, target_user_id if target_user_id else target_username)
-            await update.message.reply_text(f"📋 Долги пользователя {target_user_name}:\n{debts_str}")
+            uid = target_user_id if target_user_id else target_username
+            data = get_debts_for_user(chat_id, uid, mode="user")
+            debts = data.get("debts", [])
+            if not debts:
+                await update.message.reply_text(f"У {target_user_name} нет активных долгов.")
+            else:
+                lines = [f"📋 Долги пользователя {target_user_name}:"]
+                total = 0
+                for creditor, amt, desc in debts:
+                    lines.append(f"• {creditor}: {amt:.2f} руб. ({desc})")
+                    total += amt
+                lines.append(f"   Итого: {total:.2f} руб.")
+                await update.message.reply_text("\n".join(lines))
         else:
-            debts_str = get_debts_for_user(chat_id, user_id)
-            await update.message.reply_text(debts_str)
+            # !долги – свои долги (я должен + мне должны)
+            data = get_debts_for_user(chat_id, user_id, mode="self")
+            i_owe = data.get("i_owe", [])
+            owe_me = data.get("owe_me", [])
+            if not i_owe and not owe_me:
+                await update.message.reply_text("Нет активных долгов.")
+                return
+            lines = []
+            if i_owe:
+                lines.append("📌 Вы должны:")
+                total_i = 0
+                for creditor, amt, desc in i_owe:
+                    lines.append(f"• {creditor}: {amt:.2f} руб. ({desc})")
+                    total_i += amt
+                lines.append(f"   Итого: {total_i:.2f} руб.")
+            if owe_me:
+                lines.append("📌 Вам должны:")
+                total_m = 0
+                for debtor, amt, desc in owe_me:
+                    lines.append(f"• {debtor}: {amt:.2f} руб. ({desc})")
+                    total_m += amt
+                lines.append(f"   Итого: {total_m:.2f} руб.")
+            await update.message.reply_text("\n".join(lines))
         return
 
-    # ---------- Скачивание видео по ссылке ----------
+    # ---------- Скачивание видео по ссылке (только TikTok) ----------
     url_match = re.search(r'(https?://\S+)', text)
     if not url_match:
         return
