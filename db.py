@@ -1,6 +1,5 @@
 import sqlite3
 import os
-from datetime import date
 
 DB_PATH = "/app/data/bot.db"
 
@@ -43,29 +42,18 @@ def init_db():
             PRIMARY KEY (chat_id, user_id)
         )
     ''')
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS daily_honors (
-            chat_id TEXT,
-            user_id TEXT,
-            role TEXT,
-            chosen_date TEXT,
-            PRIMARY KEY (chat_id, user_id, chosen_date)
-        )
-    ''')
     conn.commit()
     conn.close()
     # Миграция: добавляем колонку original_amount, если её нет
     migrate_db()
 
 def migrate_db():
-    """Добавляет недостающие колонки в существующие таблицы."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("PRAGMA table_info(debts)")
     columns = [col[1] for col in c.fetchall()]
     if "original_amount" not in columns:
         c.execute("ALTER TABLE debts ADD COLUMN original_amount REAL DEFAULT 0")
-    # Обновляем original_amount для существующих записей, если они есть
     c.execute("UPDATE debts SET original_amount = amount WHERE original_amount IS NULL")
     conn.commit()
     conn.close()
@@ -166,36 +154,3 @@ def get_all_chats_with_members():
     rows = c.fetchall()
     conn.close()
     return [row[0] for row in rows]
-
-# ---------- Ежедневные почести ----------
-def set_daily_honor(chat_id: str, user_id: str, role: str):
-    today = date.today().isoformat()
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''
-        INSERT OR REPLACE INTO daily_honors (chat_id, user_id, role, chosen_date)
-        VALUES (?, ?, ?, ?)
-    ''', (chat_id, user_id, role, today))
-    conn.commit()
-    conn.close()
-
-def get_daily_honors(chat_id: str):
-    today = date.today().isoformat()
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''
-        SELECT user_id, role FROM daily_honors
-        WHERE chat_id = ? AND chosen_date = ?
-    ''', (chat_id, today))
-    rows = c.fetchall()
-    conn.close()
-    return {user_id: role for user_id, role in rows}
-
-def is_honors_chosen_today(chat_id: str) -> bool:
-    today = date.today().isoformat()
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT 1 FROM daily_honors WHERE chat_id = ? AND chosen_date = ? LIMIT 1", (chat_id, today))
-    row = c.fetchone()
-    conn.close()
-    return row is not None
