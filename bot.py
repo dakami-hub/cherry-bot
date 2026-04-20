@@ -4,16 +4,14 @@ import logging
 import random
 import asyncio
 import sqlite3
-from datetime import datetime, date
+from datetime import datetime
 from zoneinfo import ZoneInfo
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import yt_dlp
-from telegram import Update, ChatMemberUpdated
-from telegram.ext import Application, MessageHandler, filters, ContextTypes, ChatMemberHandler
+from telegram import Update
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from db import (
     init_db, add_debt, repay_debt, get_debts_for_user,
-    save_chat_member, get_chat_members,
-    set_daily_honor, get_daily_honors, is_honors_chosen_today, get_all_chats_with_members, DB_PATH
+    save_chat_member, get_chat_members, get_all_chats_with_members
 )
 from keyboard import fix_keyboard
 
@@ -83,111 +81,6 @@ def download_audio(url: str) -> str | None:
         logger.error(f"Audio download error: {e}")
         return None
 
-# -------------------- Обновление участников чатов --------------------
-async def update_all_chat_members(app: Application):
-    chats = get_all_chats_with_members()
-    for chat_id in chats:
-        try:
-            members = []
-            async for member in app.bot.get_chat_members(chat_id):
-                if not member.user.is_bot:
-                    members.append(member.user)
-            for user in members:
-                save_chat_member(chat_id, str(user.id), user.username or "", user.full_name or "")
-            logger.info(f"Updated members for chat {chat_id}: {len(members)} users")
-        except Exception as e:
-            logger.warning(f"Cannot get members for chat {chat_id}: {e} (bot may not be admin)")
-
-# -------------------- Ежедневные почести --------------------
-HONOR_ROLES = ["huesos", "cherviviy", "pleshiviy", "smradniy"]
-HONOR_EMOJI = {
-    "huesos": "🍆",
-    "cherviviy": "🐛",
-    "pleshiviy": "🦲",
-    "smradniy": "💨"
-}
-HONOR_NAMES = {
-    "huesos": "хуесос",
-    "cherviviy": "червивый",
-    "pleshiviy": "плешивый",
-    "smradniy": "смрадный"
-}
-
-async def assign_missing_roles(chat_id: str, context: ContextTypes.DEFAULT_TYPE):
-    members = get_chat_members(chat_id)
-    honors = get_daily_honors(chat_id)
-    changed = False
-    for user_id, username, full_name in members:
-        if user_id not in honors:
-            role = random.choice(HONOR_ROLES)
-            set_daily_honor(chat_id, user_id, role)
-            changed = True
-    if changed:
-        await send_honors_message(chat_id, context)
-
-async def send_honors_message(chat_id: str, context: ContextTypes.DEFAULT_TYPE):
-    honors = get_daily_honors(chat_id)
-    members = get_chat_members(chat_id)
-    msg_lines = []
-    for user_id, username, full_name in members:
-        role = honors.get(user_id)
-        if role:
-            mention = f"@{username}" if username else full_name
-            emoji = HONOR_EMOJI.get(role, "❓")
-            name_ru = HONOR_NAMES.get(role, role)
-            msg_lines.append(f"{emoji} {mention} — {name_ru}")
-    if msg_lines:
-        msg = "🍆🐛🦲💨 Сегодняшние почести:\n" + "\n".join(msg_lines)
-        await context.bot.send_message(chat_id=chat_id, text=msg)
-    else:
-        await context.bot.send_message(chat_id=chat_id, text="Не удалось определить почести.")
-
-async def pick_daily_honors_for_chat(chat_id: str, context: ContextTypes.DEFAULT_TYPE):
-    if is_honors_chosen_today(chat_id):
-        await assign_missing_roles(chat_id, context)
-        return
-    members = get_chat_members(chat_id)
-    if not members:
-        logger.warning(f"No members in chat {chat_id}, cannot pick honors")
-        return
-    today = date.today().isoformat()
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("DELETE FROM daily_honors WHERE chat_id = ? AND chosen_date = ?", (chat_id, today))
-    conn.commit()
-    conn.close()
-    for user_id, username, full_name in members:
-        role = random.choice(HONOR_ROLES)
-        set_daily_honor(chat_id, user_id, role)
-    await send_honors_message(chat_id, context)
-
-async def daily_honors_job(context: ContextTypes.DEFAULT_TYPE):
-    chats = get_all_chats_with_members()
-    for chat_id in chats:
-        await pick_daily_honors_for_chat(chat_id, context)
-
-async def run_initial_honors_selection(app: Application):
-    chats = get_all_chats_with_members()
-    for chat_id in chats:
-        await pick_daily_honors_for_chat(chat_id, app)
-
-async def track_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    result = update.chat_member
-    if not result:
-        return
-    if result.new_chat_member.status == "member" and result.old_chat_member.status in ("left", "kicked"):
-        chat_id = str(result.chat.id)
-        user = result.new_chat_member.user
-        if user.is_bot:
-            return
-        save_chat_member(chat_id, str(user.id), user.username or "", user.full_name or "")
-        if is_honors_chosen_today(chat_id):
-            honors = get_daily_honors(chat_id)
-            if str(user.id) not in honors:
-                role = random.choice(HONOR_ROLES)
-                set_daily_honor(chat_id, str(user.id), role)
-                await send_honors_message(chat_id, context)
-
 # -------------------- Обработчик сообщений --------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
@@ -200,19 +93,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     save_chat_member(chat_id, user_id, username, user_name)
 
-    # Почести (если новый день или недостаёт ролей)
-    if not is_honors_chosen_today(chat_id):
-        await pick_daily_honors_for_chat(chat_id, context)
-    else:
-        await assign_missing_roles(chat_id, context)
-
-    # Случайный ответ (1% шанс)
+    # ---------- Случайный ответ (1% шанс) ----------
     if random.random() < 0.01:
         if not text.startswith('!') and update.effective_user.id != context.bot.id:
             await update.message.reply_text("Завтра в 3")
             return
 
-    # Ответ на слово "когда" (50% шанс)
+    # ---------- Ответ на слово "когда" с шансом 50% ----------
     if re.search(r'\bкогда\b', text, re.IGNORECASE):
         if random.random() < 0.5:
             if not text.startswith('!') and update.effective_user.id != context.bot.id:
@@ -230,33 +117,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📊 `!долги` – показать ваши долги (кому должны и кто вам)\n"
             "📊 `!долги @username` – показать долги указанного пользователя (кому он должен)\n"
             "🔁 `!нз текст` – исправить сбившуюся раскладку\n"
-            "👥 `@all` – упомянуть всех участников чата\n"
-            "🏆 `!почести` – показать сегодняшние почести для всех участников\n\n"
+            "👥 `@all` – упомянуть всех участников чата\n\n"
             "ℹ️ Бот автоматически скачивает видео по ссылке на TikTok."
         )
         await update.message.reply_text(help_text, parse_mode='Markdown')
-        return
-
-    # ---------- !почести ----------
-    if text == "!почести":
-        honors = get_daily_honors(chat_id)
-        if not honors:
-            await update.message.reply_text("Сегодня ещё никто не выбран. Подождите до полуночи или перезапустите бота.")
-        else:
-            members = get_chat_members(chat_id)
-            msg_lines = []
-            for uid, uname, fname in members:
-                role = honors.get(uid)
-                if role:
-                    mention = f"@{uname}" if uname else fname
-                    emoji = HONOR_EMOJI.get(role, "❓")
-                    name_ru = HONOR_NAMES.get(role, role)
-                    msg_lines.append(f"{emoji} {mention} — {name_ru}")
-            if msg_lines:
-                msg = "🍆🐛🦲💨 Текущие почести:\n" + "\n".join(msg_lines)
-                await update.message.reply_text(msg)
-            else:
-                await update.message.reply_text("Не удалось определить почести.")
         return
 
     # ---------- !нз ----------
@@ -313,7 +177,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Не удалось скачать аудио.")
         return
 
-    # ---------- Долги (новые команды) ----------
+    # ---------- Долги ----------
     if text.startswith('!должен'):
         parts = text.split(maxsplit=3)
         if len(parts) < 3:
@@ -360,7 +224,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         success = repay_debt(chat_id, creditor_id, user_id, amount, description)
         if success:
-            await update.message.reply_text(f"✅ Отметил возврат {amount} руб. для {creditor_username} ({description})")
+            await update.message.reply_text(f"✅ Отметил возврат {amount} руб. dla {creditor_username} ({description})")
         else:
             await update.message.reply_text("❌ Не найден активный долг с такой суммой или вы не должны этому пользователю.")
         return
@@ -368,7 +232,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text.startswith('!долги'):
         parts = text.split(maxsplit=1)
         if len(parts) == 2 and parts[1].startswith('@'):
-            # !долги @username – долги указанного пользователя (где он должник)
             mention = parts[1]
             target_username = mention[1:]
             target_user_id = None
@@ -393,7 +256,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lines.append(f"   Итого: {total:.2f} руб.")
                 await update.message.reply_text("\n".join(lines))
         else:
-            # !долги – свои долги (я должен + мне должны)
             data = get_debts_for_user(chat_id, user_id, mode="self")
             i_owe = data.get("i_owe", [])
             owe_me = data.get("owe_me", [])
@@ -418,7 +280,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("\n".join(lines))
         return
 
-    # ---------- Скачивание видео по ссылке (только TikTok) ----------
+    # ---------- Скачивание видео по ссылке ----------
     url_match = re.search(r'(https?://\S+)', text)
     if not url_match:
         return
@@ -438,17 +300,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(ChatMemberHandler(track_new_member, ChatMemberHandler.CHAT_MEMBER))
-
-    loop = asyncio.get_event_loop()
-    loop.create_task(update_all_chat_members(app))
-
-    scheduler = AsyncIOScheduler(timezone=ZoneInfo("Asia/Yekaterinburg"))
-    scheduler.add_job(daily_honors_job, 'cron', hour=0, minute=0, args=[app])
-    scheduler.start()
-
-    loop.create_task(run_initial_honors_selection(app))
-
     logger.info("Bot started")
     app.run_polling(drop_pending_updates=True)
 
